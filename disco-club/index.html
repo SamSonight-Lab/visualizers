@@ -36,7 +36,8 @@
   </select>
   <select id="cam">
     <option value="auto">Camera: automatisch</option>
-    <option value="tussendoor">Camera: tussen de dansers door</option>
+    <option value="lopen">Camera: over de dansvloer lopen</option>
+    <option value="tussendoor">Camera: tussen de dansers door vliegen</option>
     <option value="laag">Camera: laag over de vloer</option>
     <option value="stilzoom">Camera: stilstaand, langzaam zoomen</option>
     <option value="dichtbij">Camera: naar een danser toe</option>
@@ -51,8 +52,8 @@
   </select>
   <select id="strobe">
     <option value="uit">Stroboscoop: uit</option>
-    <option value="rustig">Stroboscoop: rustig (flits op de beat)</option>
-    <option value="vol">Stroboscoop: vol (snelle flitsen)</option>
+    <option value="soms">Stroboscoop: af en toe</option>
+    <option value="vaak">Stroboscoop: vaak</option>
   </select>
   <label>Rook <input type="range" id="smoke" min="0" max="1" step="0.05"><span id="smokeV"></span></label>
   <label>Gevoeligheid <input type="range" id="sens" min="0" max="2" step="0.05"><span id="sensV"></span></label>
@@ -77,8 +78,9 @@ const pick = a => a[Math.floor(Math.random() * a.length)];
 const TAU = Math.PI * 2;
 
 // --- Instellingen ---
-const S = { count: 9, cast: 'mix', cam: 'auto', sens: 1, strobe: 'rustig', smoke: 0.6 };
+const S = { count: 9, cast: 'mix', cam: 'auto', sens: 1, strobe: 'soms', smoke: 0.6 };
 try { Object.assign(S, JSON.parse(localStorage.getItem('discoclub') || '{}')); } catch (e) {}
+if (!['uit', 'soms', 'vaak'].includes(S.strobe)) S.strobe = S.strobe === 'vol' ? 'vaak' : 'soms';
 function save() { try { localStorage.setItem('discoclub', JSON.stringify(S)); } catch (e) {} }
 
 // --- Scène ---
@@ -93,17 +95,50 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x05030a, 0.021);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
 
-let composer = null, bloom = null;
+let composer = null, bloom = null, grade = null;
 if (THREE.EffectComposer && THREE.UnrealBloomPass) {
   composer = new THREE.EffectComposer(renderer);
   composer.addPass(new THREE.RenderPass(scene, camera));
   bloom = new THREE.UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.5, 0.72);
   composer.addPass(bloom);
+  // eindbewerking: kartelranden gladstrijken (FXAA), filmische contrastcurve, vignet en een beetje korrel
+  grade = new THREE.ShaderPass({
+    uniforms: { tDiffuse: { value: null }, res: { value: new THREE.Vector2(1, 1) }, time: { value: 0 } },
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform sampler2D tDiffuse; uniform vec2 res; uniform float time; varying vec2 vUv;
+      const vec3 LUMA = vec3(0.299, 0.587, 0.114);
+      vec3 fxaa(vec2 uv) {
+        vec2 px = 1.0 / res;
+        vec3 nw = texture2D(tDiffuse, uv + vec2(-1.0, -1.0) * px).rgb, ne = texture2D(tDiffuse, uv + vec2(1.0, -1.0) * px).rgb;
+        vec3 sw = texture2D(tDiffuse, uv + vec2(-1.0, 1.0) * px).rgb, se = texture2D(tDiffuse, uv + vec2(1.0, 1.0) * px).rgb;
+        vec3 m = texture2D(tDiffuse, uv).rgb;
+        float lnw = dot(nw, LUMA), lne = dot(ne, LUMA), lsw = dot(sw, LUMA), lse = dot(se, LUMA), lm = dot(m, LUMA);
+        float lmin = min(lm, min(min(lnw, lne), min(lsw, lse))), lmax = max(lm, max(max(lnw, lne), max(lsw, lse)));
+        vec2 dir = vec2(-((lnw + lne) - (lsw + lse)), (lnw + lsw) - (lne + lse));
+        float reduce = max((lnw + lne + lsw + lse) * 0.03125, 0.0078125);
+        dir = clamp(dir / (min(abs(dir.x), abs(dir.y)) + reduce), -8.0, 8.0) * px;
+        vec3 a = 0.5 * (texture2D(tDiffuse, uv + dir * (1.0 / 3.0 - 0.5)).rgb + texture2D(tDiffuse, uv + dir * (2.0 / 3.0 - 0.5)).rgb);
+        vec3 b = a * 0.5 + 0.25 * (texture2D(tDiffuse, uv - dir * 0.5).rgb + texture2D(tDiffuse, uv + dir * 0.5).rgb);
+        float lb = dot(b, LUMA);
+        return (lb < lmin || lb > lmax) ? a : b;
+      }
+      void main() {
+        vec3 c = fxaa(vUv) * 1.22;
+        c = c * (2.51 * c + 0.03) / (c * (2.43 * c + 0.59) + 0.14);
+        c = mix(vec3(dot(c, LUMA)), c, 1.18);
+        vec2 q = vUv - 0.5;
+        c *= 1.0 - 0.9 * dot(q, q);
+        c += (fract(sin(dot(vUv * res + time * 61.0, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.03;
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+  });
+  composer.addPass(grade);
 }
 function resize() {
   const w = Math.floor(innerWidth * PR), h = Math.floor(innerHeight * PR);
   renderer.setSize(w, h, false);
   if (composer) composer.setSize(w, h);
+  if (grade) grade.uniforms.res.value.set(w, h);
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -140,9 +175,10 @@ const wallTex = canvasTexture(256, 256, (g, w, h) => {
 });
 wallTex.wrapS = wallTex.wrapT = THREE.RepeatWrapping;
 wallTex.repeat.set(5, 1);
-const room = add(scene, new THREE.BoxGeometry(ROOM * 2, CEIL, ROOM * 2), new THREE.MeshStandardMaterial({ color: 0xb0a8c0, map: wallTex, roughness: 0.85, side: THREE.BackSide }), [0, CEIL / 2, 0]);
+const room = add(scene, new THREE.BoxGeometry(ROOM * 2, CEIL, ROOM * 2), new THREE.MeshStandardMaterial({ color: 0x77708a, map: wallTex, roughness: 0.85, side: THREE.BackSide }), [0, CEIL / 2, 0]);
 room.receiveShadow = true;
-scene.add(new THREE.AmbientLight(0x554466, 1.1));
+const ambient = new THREE.AmbientLight(0x554466, 1.1);
+scene.add(ambient);
 
 // Dansvloer: spiegelende ondergrond, daarboven lichtgevende tegels en een laag die de schaduwen opvangt
 let mirror;
@@ -603,6 +639,8 @@ function pose(d, tb, A, dt) {
   const t = tb + d.off, phi = t - Math.floor(t), J = d.joints, P = d.prev;
   for (let i = 0; i < J.length; i++) { P[i * 3] = J[i].rotation.x; P[i * 3 + 1] = J[i].rotation.y; P[i * 3 + 2] = J[i].rotation.z; }
   P[J.length * 3] = d.hips.position.y;
+  if (d.faceT === undefined) d.faceT = d.face;
+  d.face += (d.faceT - d.face) * (1 - Math.exp(-dt * 0.9));
   d.root.position.set(d.home.x, 0, d.home.z);
   d.root.rotation.set(0, d.face, 0);
   for (const g of J) g.rotation.set(0, 0, 0);
@@ -616,6 +654,7 @@ function pose(d, tb, A, dt) {
     if (t >= d.nextChange) {  // elke 8 of 16 beats een andere move
       d.move = d.type === 'robot' && Math.random() < 0.5 ? 3 : Math.floor(Math.random() * MOVES.length);
       d.nextChange = Math.floor(t) + pick([8, 8, 16]);
+      if (Math.random() < 0.5) d.faceT = d.face + rnd(-1.3, 1.3);  // en soms een andere kant op draaien
     }
   }
   // gewrichten vloeiend naar de nieuwe houding: geen schokken, en moves lopen in elkaar over (robots blijven strak)
@@ -639,7 +678,7 @@ function buildCast() {
     const d = makeDancer(S.cast === 'mix' ? pick(Object.keys(TYPES)) : S.cast);
     const [x, z] = free.pop();
     d.home.set(x + rnd(-0.3, 0.3), 0, z + rnd(-0.3, 0.3));
-    d.face = rnd(-0.6, 0.6);
+    d.face = Math.atan2(-d.home.x, -d.home.z) + rnd(-1.1, 1.1);  // ongeveer naar het midden van de vloer gekeerd
     d.move = Math.floor(Math.random() * MOVES.length);
     dancers.push(d);
   }
@@ -890,9 +929,50 @@ function along(curve, u, lookUp) {  // camera op het pad; rustig vertrekken en a
 const anyDancer = () => pick(dancers) || dj;
 const STILL = [[[-9, 3, 9], [0, 1.3, 0]], [[9, 2.2, -3], [0, 1.2, 1]], [[0, 1.5, 9.8], [0, 1.6, 0]], [[7, 5.8, 7], [0, 0.5, 0]], [[-9.5, 0.8, 0], [0, 1.6, 0]], [[6, 1.1, 8], [-1, 1.4, -2]],
                [[11.2, 1.55, 2.5], [0, 1.3, -1]], [[-11.4, 1.3, -2], [0, 1.4, 0]], [[0, 1.7, 12.6], [0, 1.5, 0]], [[-9, 1.6, 12], [2, 1.4, 0]]];  // vanaf de bar, de lounge en de ingang
+const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), wantLook = new THREE.Vector3();
+function awayFromDancers(q, room) {  // schuif punt q de ruimte tussen de dansers in
+  for (let it = 0; it < 8; it++) for (const d of dancers) {
+    const dx = q.x - d.home.x, dz = q.z - d.home.z, dist = Math.hypot(dx, dz) || 0.01;
+    if (dist < room) { q.x += dx / dist * (room - dist); q.z += dz / dist * (room - dist); }
+  }
+  return q;
+}
 const SHOTS = {
-  tussendoor: { w: 1.0, beats: 16, make: () => ({ curve: pathThrough(rnd(1.25, 1.6)) }), at(s, u) { along(s.curve, u, 0); camFov = 56; } },
-  laag:       { w: 0.5, beats: 16, make: () => ({ curve: pathThrough(rnd(0.3, 0.5)) }), at(s, u) { along(s.curve, u, 1.6); camFov = 58; } },
+  lopen: { w: 3, beats: 32, make() {  // wandelen over de dansvloer, op ooghoogte en in wandeltempo
+      let best = null, bestGap = -1;
+      for (let attempt = 0; attempt < 40 && bestGap < 1.1; attempt++) {
+        const a = rnd(0, TAU), b = a + Math.PI + rnd(-1, 1), pts = [awayFromDancers(V(5.6 * Math.cos(a), 1.62, 5.6 * Math.sin(a)), 1.25)];
+        for (let k = 0; k < 3; k++) pts.push(awayFromDancers(V(rnd(-4, 4), 1.62, rnd(-4, 4)), 1.25));
+        pts.push(awayFromDancers(V(5.6 * Math.cos(b), 1.62, 5.6 * Math.sin(b)), 1.25));
+        const curve = new THREE.CatmullRomCurve3(pts, false, 'centripetal');
+        let gap = 1e9;
+        for (let i = 0; i <= 40; i++) { const q = curve.getPoint(i / 40); for (const d of dancers) gap = Math.min(gap, Math.hypot(q.x - d.home.x, q.z - d.home.z)); }
+        if (gap > bestGap) { bestGap = gap; best = curve; }
+      }
+      return { curve: best, len: best.getLength(), look: null, lt: 0 };
+    },
+    at(s, u, t) {
+      const dt = Math.max(0, t - s.lt);
+      s.lt = t;
+      const dist = Math.min(s.len - 0.05, 0.55 * t), k = dist / s.len;  // 0,55 m/s
+      s.curve.getPointAt(k, camPos);
+      camPos.y = 1.62 + 0.018 * Math.sin(dist * 9);  // lichte loopbeweging
+      const tan = s.curve.getTangentAt(k, tmpV);
+      wantLook.copy(camPos).addScaledVector(tan, 5);
+      wantLook.y = 1.45;
+      // onderweg kijken naar de dichtstbijzijnde danser die schuin voor de camera staat
+      let near = null, nd = 4.5;
+      for (const d of dancers) {
+        const dx = d.home.x - camPos.x, dz = d.home.z - camPos.z, dd = Math.hypot(dx, dz);
+        if (dd < nd && dd > 1.2 && (dx * tan.x + dz * tan.z) / dd > 0.25) { nd = dd; near = d; }
+      }
+      if (near) wantLook.lerp(tmpV2.set(near.home.x, 1.35, near.home.z), 0.6);
+      if (!s.look) s.look = wantLook.clone(); else s.look.lerp(wantLook, 1 - Math.exp(-dt * 1.1));  // traag meedraaien, geen gezwenk
+      camLook.copy(s.look);
+      camFov = 58;
+    } },
+  tussendoor: { w: 0.4, beats: 16, make: () => ({ curve: pathThrough(rnd(1.25, 1.6)) }), at(s, u) { along(s.curve, u, 0); camFov = 56; } },
+  laag:       { w: 0.3, beats: 16, make: () => ({ curve: pathThrough(rnd(0.3, 0.5)) }), at(s, u) { along(s.curve, u, 1.6); camFov = 58; } },
   stilzoom:   { w: 2, beats: 16, make() {  // stilstaande camera die alleen langzaam in- of uitzoomt
       const zoomIn = Math.random() < 0.65, wide = rnd(52, 62);
       if (Math.random() < 0.45) {  // van ver inzoomen op één danser
@@ -944,6 +1024,31 @@ function updateCamera(now) {
   if (Math.abs(camera.fov - camFov) > 0.01) { camera.fov = camFov; camera.updateProjectionMatrix(); }
 }
 
+// --- Lichtshow ---
+// In plaats van alles tegelijk in alle kleuren: per 16 beats één lichtstand, in een palet van twee kleuren
+const PALETTES = [[0xff2d95, 0x00e5ff], [0xff6b00, 0xff1744], [0x2979ff, 0xe0f7ff], [0x7cff00, 0xb967ff], [0xff00e5, 0x304ffe], [0xffab00, 0x00bfa5], [0xff1744, 0xffffff]]
+  .map(p => p.map(c => new THREE.Color(c)));
+const WHITE_PAL = [new THREE.Color(0xffffff), new THREE.Color(0xbcd4ff)];
+// niveaus per lichtsoort (1 = normaal); forms = welke formaties de moving heads afwisselen
+const CUES = [
+  { name: 'alles',  w: 3,   spots: 1,    heads: 1,   lasers: 0, floor: 1,    flecks: 1,   wash: 1,   forms: [1, 0, 4, 2] },
+  { name: 'heads',  w: 2,   spots: 0.15, heads: 1.3, lasers: 0, floor: 0.35, flecks: 0.5, wash: 0.3, forms: [2, 3, 4, 0] },
+  { name: 'lasers', w: 1.5, spots: 0.1,  heads: 0.2, lasers: 1, floor: 0.25, flecks: 0.4, wash: 0.2, forms: [3] },
+  { name: 'bol',    w: 1.5, spots: 0.25, heads: 0,   lasers: 0, floor: 0.2,  flecks: 1.9, wash: 0.4, forms: [0], white: true },
+  { name: 'vloer',  w: 1.5, spots: 0.4,  heads: 0.4, lasers: 0, floor: 1.4,  flecks: 0.6, wash: 0.6, forms: [1, 2] },
+];
+let cue = CUES[0], palTarget = PALETTES[0];
+const L = { spots: 1, heads: 1, lasers: 0, floor: 1, flecks: 1, wash: 1 }, pal = [PALETTES[0][0].clone(), PALETTES[0][1].clone()];
+function nextCue() {
+  const pool = CUES.filter(c => c !== cue);
+  let r = Math.random() * pool.reduce((sum, c) => sum + c.w, 0);
+  cue = pool.find(c => (r -= c.w) < 0) || pool[0];
+  if (cue.white) palTarget = WHITE_PAL;
+  else if (palTarget === WHITE_PAL || Math.random() < 0.6) palTarget = pick(PALETTES.filter(q => q !== palTarget));
+}
+// stroboscoop: salvo's op willekeurige momenten, los van de beat
+let strobeUntil = 0, nextStrobe = 20, strobeHz = 11;
+
 // --- Loop ---
 const meters = [...document.querySelectorAll('#meters i')];
 let last = performance.now(), pattern = 0, lastBeat = -1, frameNo = 0;
@@ -961,7 +1066,22 @@ function frame(nowMs) {
   if (beat !== lastBeat) {
     lastBeat = beat;
     if (beat % 8 === 0) pattern = Math.floor(Math.random() * 5);
+    if (beat % 16 === 0) nextCue();
   }
+  // strobe-salvo's
+  if (S.strobe === 'uit' || energy < 0.3) { strobeUntil = 0; nextStrobe = Math.max(nextStrobe, now + 5); }
+  else if (now > nextStrobe) {
+    strobeUntil = now + rnd(1.5, 3.5);
+    nextStrobe = strobeUntil + (S.strobe === 'vaak' ? rnd(10, 22) : rnd(25, 55));
+    strobeHz = rnd(9, 13);
+  }
+  const strobing = now < strobeUntil, flash = strobing && (now * strobeHz) % 1 < 0.3 ? 1 : 0;
+  // niveaus en kleuren vloeien naar de huidige lichtstand; tijdens een salvo dooft al het andere licht bijna uit
+  const kL = 1 - Math.exp(-dt * 3), dim = strobing ? 0.12 : 1;
+  for (const key in L) L[key] += (cue[key] - L[key]) * kL;
+  pal[0].lerp(palTarget[0], kL * 0.7);
+  pal[1].lerp(palTarget[1], kL * 0.7);
+  ambient.intensity = strobing ? 0.3 : 0.5 + 0.35 * L.wash;
 
   // vloer
   for (let i = 0; i < N * N; i++) {
@@ -972,18 +1092,18 @@ function frame(nowMs) {
     else if (pattern === 2) k = (x + beat) % 4 === 0 || (z + beat) % 4 === 0;
     else if (pattern === 3) k = Math.sin(i * 91.7 + beat * 13.1) > 0.2;
     else k = (Math.floor(x / 3) + Math.floor(z / 3) + beat) % 2;
-    const c = NEON[(pattern === 3 ? i * 7 + beat : Math.floor(Math.hypot(dx, dz) * 0.6) + beat) % NEON.length];
-    tiles.setColorAt(i, tmpColor.copy(c).multiplyScalar(k ? 0.3 + 0.7 * pulse * (0.4 + energy * 0.6) : 0.06));
+    const c = pal[(pattern === 3 ? i * 7 + beat : Math.floor(Math.hypot(dx, dz) * 0.6) + beat) & 1];
+    tiles.setColorAt(i, tmpColor.copy(c).multiplyScalar((k ? 0.3 + 0.7 * pulse * (0.4 + energy * 0.6) : 0.06) * L.floor * dim));
   }
   tiles.instanceColor.needsUpdate = true;
-  ledMat.color.copy(NEON[beat % NEON.length]).multiplyScalar(0.25 + 0.75 * hit);
+  ledMat.color.copy(pal[beat & 1]).multiplyScalar((0.25 + 0.75 * hit) * dim);
 
   // equalizer, speakers, wandbalken
   for (let i = 0; i < BARS; i++) {
     const h = 0.15 + 3.6 * spectrum(i);
     m4.makeScale(1, h, 1).setPosition((i - BARS / 2 + 0.5) * 0.52, 2.2 + h / 2, -10.85);
     bars.setMatrixAt(i, m4);
-    bars.setColorAt(i, tmpColor.setHSL(0.85 - 0.5 * i / BARS, 1, 0.3 + 0.25 * pulse));
+    bars.setColorAt(i, tmpColor.copy(pal[0]).lerp(pal[1], i / (BARS - 1)).multiplyScalar((0.4 + 0.4 * pulse) * (strobing ? 0.3 : 1)));
   }
   bars.instanceMatrix.needsUpdate = true;
   bars.instanceColor.needsUpdate = true;
@@ -991,55 +1111,51 @@ function frame(nowMs) {
   wallBars.forEach((w, i) => {
     const lvl = bands[i % 3].v;
     w.scale.y = 0.6 + 3.4 * lvl;
-    w.material.color.copy(NEON[(i + (beat >> 2)) % NEON.length]).multiplyScalar(0.15 + 0.75 * lvl);
+    w.material.color.copy(pal[i & 1]).multiplyScalar((0.15 + 0.75 * lvl) * L.wash * dim);
   });
 
   // spots: zwieren over de vloer
   spots.forEach((s, i) => {
     const a = now * (0.5 + 0.13 * i) + i * 1.7, r = 3 + 2 * Math.sin(now * 0.31 + i);
     s.light.target.position.set(r * Math.cos(a), 0, r * Math.sin(a));
-    s.light.intensity = 0.9 + 1.5 * hit + 0.5 * mid;
-    s.light.color.lerp(NEON[(i + Math.floor(beat / 4)) % NEON.length], 0.1);
+    s.light.intensity = (0.9 + 1.5 * hit + 0.5 * mid) * L.spots * dim;
+    s.light.color.lerp(pal[i & 1], 0.1);
     s.beam.aim(s.light.target.position);
     s.beam.mat.uniforms.color.value.copy(s.light.color);
-    s.beam.mat.uniforms.strength.value = 0.12 + 0.3 * hit + 0.1 * treble;
+    s.beam.mat.uniforms.strength.value = (0.12 + 0.3 * hit + 0.1 * treble) * L.spots * dim;
     s.beam.mat.uniforms.time.value = now;
   });
-  // moving heads: elke 4 beats een nieuwe formatie, snel maar vloeiend erheen
-  const formation = FORMATIONS[(beat >> 2) % FORMATIONS.length];
+  // moving heads: elke 4 beats de volgende formatie van de huidige lichtstand, snel maar vloeiend erheen
+  const formation = cue.forms[(beat >> 2) % cue.forms.length];
   heads.forEach((h, i) => {
     h.cur.lerp(headTarget(h, i, formation, now), 1 - Math.exp(-dt * 7));
     h.beam.aim(h.cur);
     const u = h.beam.mat.uniforms;
-    u.color.value.lerp(NEON[((beat >> 2) + (i & 1) * 2) % NEON.length], 0.15);
-    u.strength.value = energy < 0.1 ? 0.05 : 0.25 + 0.55 * hit + 0.15 * treble;
+    u.color.value.lerp(pal[(i + 1) & 1], 0.15);
+    u.strength.value = (energy < 0.1 ? 0.05 : 0.25 + 0.55 * hit + 0.15 * treble) * L.heads * dim;
     u.time.value = now + i;
-    h.lens.material.color.copy(u.color.value).lerp(white, 0.5);
+    h.lens.material.color.copy(u.color.value).lerp(white, 0.5).multiplyScalar(Math.min(1, L.heads + 0.1));
   });
-  // lasers: 8 van elke 24 beats, waaier die open en dicht gaat
-  const lasersOn = energy > 0.3 && (beat >> 3) % 3 === 1;
+  // lasers: alleen in de laser-lichtstand; waaier die open en dicht gaat
+  const lasersOn = energy > 0.3 && L.lasers > 0.5 && !strobing;
   for (const l of lasers) {
     l.g.visible = lasersOn;
     if (!lasersOn) continue;
     l.g.rotation.set(0.42 + 0.22 * Math.sin(now * 0.7), -l.side * (0.45 + 0.3 * Math.sin(now * 0.5)), 0);
     const spread = 0.02 + 0.09 * (0.5 + 0.5 * Math.sin(beatPos * Math.PI / 2));
     l.rays.forEach((r, i) => r.rotation.y = (i - 4) * spread);
+    l.mat.color.copy(pal[l.side > 0 ? 1 : 0]).lerp(white, 0.15);
     l.mat.opacity = 0.45 + 0.55 * pulse;
   }
-  // stroboscoop
-  let flash = 0;
-  if (S.strobe !== 'uit' && energy > 0.5) {
-    flash = pulse * pulse * 0.45;
-    if (S.strobe === 'vol' && beat % 32 >= 28) flash = Math.floor(now * 20) % 2 ? 1 : 0;  // 4 beats lang 10 flitsen per seconde
-  }
-  strobeLight.intensity = flash * 5;
+  strobeLight.intensity = flash * 6;
   strobeMat.color.setScalar(flash);
-  if (bloom) bloom.strength = 0.5 + 0.35 * hit + 0.3 * flash;
+  if (bloom) bloom.strength = 0.5 + 0.35 * hit * dim + 0.35 * flash;
+  if (grade) grade.uniforms.time.value = now;
 
   // spiegelbol
   ball.rotation.y += dt * 0.3;
   glintMat.opacity = 0.3 + 0.7 * treble;
-  updateFlecks(ball.rotation.y, 0.45 + 0.5 * treble + 0.3 * hit);
+  updateFlecks(ball.rotation.y, (0.45 + 0.5 * treble + 0.3 * hit) * L.flecks * (strobing ? 0.3 : 1));
   updateSmoke(dt);
 
   // dansers
@@ -1049,8 +1165,8 @@ function frame(nowMs) {
   }
   pose(dj, beatPos, energy * 0.7, dt);
   for (const c of crowd) pose(c, beatPos, energy * 0.4, dt);
-  washMats.forEach((m, i) => m.color.copy(NEON[(i * 2 + (beat >> 3)) % NEON.length]).multiplyScalar(0.25 + 0.45 * bands[i].v));
-  pillarLed.color.copy(NEON[(beat >> 1) % NEON.length]).multiplyScalar(0.2 + 0.8 * hit);
+  washMats.forEach((m, i) => m.color.copy(pal[i & 1]).multiplyScalar((0.25 + 0.45 * bands[i].v) * L.wash * dim));
+  pillarLed.color.copy(pal[(beat >> 1) & 1]).multiplyScalar((0.2 + 0.8 * hit) * dim);
 
   updateCamera(now);
 
@@ -1092,7 +1208,7 @@ addEventListener('keydown', e => {
   if (k === 'h') $('ui').classList.toggle('hidden');
   if (k === 'f') $('btnFull').click();
   if (k === 'n') buildCast();  // nieuwe bezetting
-  if (k === 's') { const o = ['uit', 'rustig', 'vol']; S.strobe = o[(o.indexOf(S.strobe) + 1) % 3]; syncUI(); save(); }
+  if (k === 's') { const o = ['uit', 'soms', 'vaak']; S.strobe = o[(o.indexOf(S.strobe) + 1) % 3]; syncUI(); save(); }
   if (k === 'c') { const o = ['auto', ...SHOT_KINDS]; S.cam = o[(o.indexOf(S.cam) + 1) % o.length]; syncUI(); save(); }
   if (k === ' ') shot = null;  // spatie: direct een ander shot
 });
