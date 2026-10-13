@@ -56,6 +56,13 @@
     <option value="soms">Stroboscoop: af en toe</option>
     <option value="vaak">Stroboscoop: vaak</option>
   </select>
+  <select id="floor">
+    <option value="auto">Vloer: afwisselend</option>
+    <option value="tegels">Vloer: tegels</option>
+    <option value="fractal">Vloer: fractals</option>
+  </select>
+  <label>Feedback <input type="range" id="fb" min="0" max="0.92" step="0.01"><span id="fbV"></span></label>
+  <label><input type="checkbox" id="mirror"> Spiegel</label>
   <label><input type="checkbox" id="mono"> Zwart-wit</label>
   <button id="btnAll">Alles willekeurig</button>
   <select id="auto">
@@ -87,7 +94,7 @@ const pick = a => a[Math.floor(Math.random() * a.length)];
 const TAU = Math.PI * 2;
 
 // --- Instellingen ---
-const S = { count: 9, cast: 'mix', cam: 'auto', sens: 1, strobe: 'soms', smoke: 0.6, mono: false, auto: 0 };
+const S = { count: 9, cast: 'mix', cam: 'auto', sens: 1, strobe: 'soms', smoke: 0.6, mono: false, auto: 0, fb: 0, mirror: false, floor: 'auto' };
 try { Object.assign(S, JSON.parse(localStorage.getItem('discoclub') || '{}')); } catch (e) {}
 if (!['uit', 'soms', 'vaak'].includes(S.strobe)) S.strobe = S.strobe === 'vol' ? 'vaak' : 'soms';
 function save() { try { localStorage.setItem('discoclub', JSON.stringify(S)); } catch (e) {} }
@@ -104,10 +111,46 @@ const scene = new THREE.Scene();
 scene.fog = new THREE.FogExp2(0x05030a, 0.021);
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
 
-let composer = null, bloom = null, grade = null;
+let composer = null, bloom = null, grade = null, feedback = null;
 if (THREE.EffectComposer && THREE.UnrealBloomPass) {
   composer = new THREE.EffectComposer(renderer);
   composer.addPass(new THREE.RenderPass(scene, camera));
+  // Visuele feedback: het vorige beeld blijft, iets gezoomd en gedraaid, als spoor hangen. Ook het spiegeleffect zit hierin.
+  feedback = new THREE.Pass();
+  feedback.material = new THREE.ShaderMaterial({
+    uniforms: { tNew: { value: null }, tOld: { value: null }, amount: { value: 0 }, zoom: { value: 1.02 }, rotA: { value: 0 }, mirror: { value: 0 }, aspect: { value: 1 } },
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform sampler2D tNew, tOld; uniform float amount, zoom, rotA, mirror, aspect; varying vec2 vUv;
+      void main() {
+        vec2 uv = vUv;
+        if (mirror > 0.5 && uv.x > 0.5) uv.x = 1.0 - uv.x;
+        vec3 c = texture2D(tNew, uv).rgb;
+        vec2 q = vUv - 0.5;
+        q.x *= aspect;
+        float cs = cos(rotA), sn = sin(rotA);
+        q = mat2(cs, -sn, sn, cs) * q / zoom;
+        q.x /= aspect;
+        float inside = step(abs(q.x), 0.5) * step(abs(q.y), 0.5);
+        gl_FragColor = vec4(max(c, texture2D(tOld, q + 0.5).rgb * amount * inside), 1.0);
+      }`,
+  });
+  feedback.quad = new THREE.FullScreenQuad(feedback.material);
+  feedback.copy = new THREE.FullScreenQuad(new THREE.MeshBasicMaterial());
+  feedback.rtA = new THREE.WebGLRenderTarget(4, 4);
+  feedback.rtB = new THREE.WebGLRenderTarget(4, 4);
+  feedback.setSize = function (w, h) { this.rtA.setSize(w, h); this.rtB.setSize(w, h); this.material.uniforms.aspect.value = w / h; };
+  feedback.render = function (renderer, writeBuffer, readBuffer) {
+    const u = this.material.uniforms;
+    u.tNew.value = readBuffer.texture;
+    u.tOld.value = this.rtA.texture;
+    renderer.setRenderTarget(this.rtB);
+    this.quad.render(renderer);
+    this.copy.material.map = this.rtB.texture;
+    renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+    this.copy.render(renderer);
+    [this.rtA, this.rtB] = [this.rtB, this.rtA];
+  };
+  composer.addPass(feedback);
   bloom = new THREE.UnrealBloomPass(new THREE.Vector2(1, 1), 0.6, 0.5, 0.72);
   composer.addPass(bloom);
   // eindbewerking: kartelranden gladstrijken (FXAA), filmische contrastcurve, vignet en een beetje korrel
@@ -210,6 +253,57 @@ shadowCatcher.position.y = 0.035;
 shadowCatcher.receiveShadow = true;
 shadowCatcher.renderOrder = 2;
 scene.add(shadowCatcher);
+// Fractals als lichtbeeld: op de dansvloer (in plaats van de effen tegels) en op de led-wand achter de dj
+function fractalMaterial(gridX, gridY) {
+  return new THREE.ShaderMaterial({
+    uniforms: { time: { value: 0 }, level: { value: 0 }, kind: { value: 0 }, colA: { value: new THREE.Color() }, colB: { value: new THREE.Color() } },
+    vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `uniform float time, level; uniform int kind; uniform vec3 colA, colB; varying vec2 vUv;
+      mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+      void main() {
+        vec2 g = fract(vUv * vec2(${gridX.toFixed(1)}, ${gridY.toFixed(1)}));  // tegel- of pixelraster
+        float mask = step(0.045, g.x) * step(g.x, 0.955) * step(0.045, g.y) * step(g.y, 0.955);
+        vec2 p = (vUv - 0.5) * 2.0;
+        p.x *= ${(gridX / gridY).toFixed(3)};
+        float v, t;
+        if (kind == 0) {  // Julia
+          vec2 z = p * 1.45, c = 0.7885 * vec2(cos(time * 0.22), sin(time * 0.22));
+          float it = 0.0;
+          for (int i = 0; i < 48; i++) { z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c; if (dot(z, z) > 16.0) break; it += 1.0; }
+          float sm = it - log2(log2(dot(z, z) + 1.0001));
+          v = it >= 48.0 ? 0.12 : clamp(sm / 22.0, 0.04, 1.0);
+          t = sm * 0.07;
+        } else if (kind == 1) {  // vouw-kaleidoscoop
+          vec2 z = p;
+          float tr = 1e9;
+          for (int i = 0; i < 8; i++) { z = abs(z) - vec2(0.55, 0.35); z *= rot(time * 0.1 + 0.6); z *= 1.25; tr = min(tr, abs(z.x) / pow(1.25, float(i + 1))); }
+          float l = log(tr + 1e-6);
+          v = pow(0.5 + 0.5 * cos(l * 3.5), 2.0);
+          t = l * 0.2;
+        } else {  // oneindige zoom op een log-polair raster
+          float r = length(p) + 1e-4;
+          vec2 lp = vec2(log(r) - time * 0.28, atan(p.y, p.x) / 6.28318);
+          vec2 q = abs(fract(vec2(lp.x * 1.2 + lp.y, lp.y * 8.0)) - 0.5) * 2.0;
+          float tr = 1e9;
+          for (int i = 0; i < 5; i++) { q = abs(q) - vec2(0.5, 0.3); q *= rot(0.9 + time * 0.05); q *= 1.35; tr = min(tr, abs(q.x) / pow(1.35, float(i + 1))); }
+          float l = log(tr + 1e-6);
+          v = pow(0.5 + 0.5 * cos(l * 3.5), 1.5) * smoothstep(0.0, 0.2, r);
+          t = l * 0.2 + lp.x * 0.3;
+        }
+        gl_FragColor = vec4(mix(colA, colB, 0.5 + 0.5 * sin(t * 6.28318 + time * 0.3)) * v * mask * level, 1.0);
+      }`,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  });
+}
+const floorFx = new THREE.Mesh(new THREE.PlaneGeometry(N, N), fractalMaterial(N, N));
+floorFx.rotation.x = -Math.PI / 2;
+floorFx.position.y = 0.03;
+floorFx.renderOrder = 1;
+floorFx.visible = false;
+scene.add(floorFx);
+const wallFx = new THREE.Mesh(new THREE.PlaneGeometry(14.8, 5.2), fractalMaterial(56, 20));
+wallFx.position.set(0, 3.3, -10.93);
+scene.add(wallFx);
 // ledstrips rond de vloer
 const ledMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
 for (const [x, z, w, d] of [[0, -6.15, 12.4, 0.1], [0, 6.15, 12.4, 0.1], [-6.15, 0, 0.1, 12.4], [6.15, 0, 0.1, 12.4]]) add(scene, BOX, ledMat, [x, 0.04, z], [w, 0.06, d]);
@@ -1047,12 +1141,15 @@ const CUES = [
   { name: 'bol',    w: 1.5, spots: 0.25, heads: 0,   lasers: 0, floor: 0.2,  flecks: 1.9, wash: 0.4, forms: [0], white: true },
   { name: 'vloer',  w: 1.5, spots: 0.4,  heads: 0.4, lasers: 0, floor: 1.4,  flecks: 0.6, wash: 0.6, forms: [1, 2] },
 ];
-let cue = CUES[0], palTarget = PALETTES[0];
+let cue = CUES[0], palTarget = PALETTES[0], cueFractal = false, floorKind = 0, wallKind = 1;
 const L = { spots: 1, heads: 1, lasers: 0, floor: 1, flecks: 1, wash: 1 }, pal = [PALETTES[0][0].clone(), PALETTES[0][1].clone()];
 function nextCue() {
   const pool = CUES.filter(c => c !== cue);
   let r = Math.random() * pool.reduce((sum, c) => sum + c.w, 0);
   cue = pool.find(c => (r -= c.w) < 0) || pool[0];
+  cueFractal = Math.random() < 0.5;  // deze lichtstand met fractal-vloer of met tegels
+  floorKind = Math.floor(Math.random() * 3);
+  wallKind = Math.floor(Math.random() * 3);
   if (cue.white) palTarget = WHITE_PAL;
   else if (palTarget === WHITE_PAL || Math.random() < 0.6) palTarget = pick(PALETTES.filter(q => q !== palTarget));
 }
@@ -1066,6 +1163,9 @@ function randomizeAll() {
   S.strobe = pick(['uit', 'soms', 'soms', 'vaak']);
   S.smoke = Math.round(rnd(0.2, 1) * 20) / 20;
   S.mono = r() < 0.2;
+  S.fb = r() < 0.35 ? Math.round(rnd(0.6, 0.9) * 100) / 100 : 0;
+  S.mirror = r() < 0.12;
+  S.floor = pick(['auto', 'auto', 'tegels', 'fractal']);
   nextCue();
   buildCast();
   syncUI();
@@ -1121,6 +1221,17 @@ function frame(nowMs) {
     tiles.setColorAt(i, tmpColor.copy(c).multiplyScalar((k ? 0.3 + 0.7 * pulse * (0.4 + energy * 0.6) : 0.06) * L.floor * dim));
   }
   tiles.instanceColor.needsUpdate = true;
+  const fractalFloor = S.floor === 'fractal' || (S.floor === 'auto' && cueFractal);
+  tiles.visible = !fractalFloor;
+  floorFx.visible = fractalFloor;
+  for (const [mesh, kind, level] of [[floorFx, floorKind, (0.45 + 0.75 * pulse * (0.4 + energy * 0.6)) * L.floor * dim * 1.3], [wallFx, wallKind, (0.22 + 0.2 * pulse) * (strobing ? 0.3 : 1)]]) {
+    const u = mesh.material.uniforms;
+    u.time.value = now;
+    u.level.value = level;
+    u.kind.value = kind;
+    u.colA.value.copy(pal[0]);
+    u.colB.value.copy(pal[1]);
+  }
   ledMat.color.copy(pal[beat & 1]).multiplyScalar((0.25 + 0.75 * hit) * dim);
 
   // equalizer, speakers, wandbalken
@@ -1175,6 +1286,14 @@ function frame(nowMs) {
   strobeLight.intensity = flash * 6;
   strobeMat.color.setScalar(flash);
   if (bloom) bloom.strength = 0.5 + 0.35 * hit * dim + 0.35 * flash;
+  if (feedback) {
+    feedback.enabled = S.fb > 0.01 || S.mirror;
+    const u = feedback.material.uniforms;
+    u.amount.value = S.fb;
+    u.zoom.value = 1.02 + 0.012 * Math.sin(now * 0.21);
+    u.rotA.value = 0.006 * Math.sin(now * 0.13);
+    u.mirror.value = S.mirror ? 1 : 0;
+  }
   if (grade) { grade.uniforms.time.value = now; grade.uniforms.mono.value = S.mono ? 1 : 0; }
   if (S.auto > 0 && now > autoNext) { randomizeAll(); autoNext = now + S.auto; }
 
@@ -1212,7 +1331,8 @@ function frame(nowMs) {
 function syncUI() {
   $('count').value = S.count; $('countV').textContent = S.count;
   $('cast').value = S.cast; $('cam').value = S.cam; $('strobe').value = S.strobe;
-  $('mono').checked = S.mono; $('auto').value = S.auto;
+  $('mono').checked = S.mono; $('auto').value = S.auto; $('mirror').checked = S.mirror; $('floor').value = S.floor;
+  $('fb').value = S.fb; $('fbV').textContent = Math.round(S.fb * 100) + '%';
   $('smoke').value = S.smoke; $('smokeV').textContent = Math.round(S.smoke * 100) + '%';
   $('sens').value = S.sens; $('sensV').textContent = Math.round(S.sens * 100) + '%';
 }
@@ -1220,6 +1340,9 @@ $('count').oninput = e => { S.count = +e.target.value; syncUI(); save(); buildCa
 $('cast').onchange = e => { S.cast = e.target.value; save(); buildCast(); };
 $('cam').onchange = e => { S.cam = e.target.value; save(); };
 $('strobe').onchange = e => { S.strobe = e.target.value; save(); };
+$('mirror').onchange = e => { S.mirror = e.target.checked; save(); };
+$('floor').onchange = e => { S.floor = e.target.value; save(); };
+$('fb').oninput = e => { S.fb = +e.target.value; syncUI(); save(); };
 $('mono').onchange = e => { S.mono = e.target.checked; save(); };
 $('btnAll').onclick = () => { randomizeAll(); autoNext = performance.now() / 1000 + S.auto; };
 $('auto').onchange = e => { S.auto = +e.target.value; autoNext = performance.now() / 1000 + S.auto; save(); };
@@ -1240,6 +1363,7 @@ addEventListener('keydown', e => {
   if (k === 'n') buildCast();  // nieuwe bezetting
   if (k === 'b') { S.mono = !S.mono; syncUI(); save(); }
   if (k === 'x') $('btnAll').click();
+  if (k === 'v') { const o = ['auto', 'tegels', 'fractal']; S.floor = o[(o.indexOf(S.floor) + 1) % 3]; syncUI(); save(); }
   if (k === 's') { const o = ['uit', 'soms', 'vaak']; S.strobe = o[(o.indexOf(S.strobe) + 1) % 3]; syncUI(); save(); }
   if (k === 'c') { const o = ['auto', ...SHOT_KINDS]; S.cam = o[(o.indexOf(S.cam) + 1) % o.length]; syncUI(); save(); }
   if (k === ' ') shot = null;  // spatie: direct een ander shot
