@@ -2,6 +2,19 @@
 
 Audio-visualizers van SamSo.
 
+## SamSo-DiscoClub (testversie)
+
+<img src="disco-club/app/icon-preview.png" width="128" alt="SamSo-DiscoClub icoon">
+
+Een 3D-discotheek waarin figuren dansen op de muziek die je Mac afspeelt. Staat in de map [`disco-club`](disco-club).
+
+- Mensen, robots, aliens en tovenaars met tien dansmoves, gestuurd door de beat
+- Spiegelbol die de zaal weerspiegelt en lichtvlekjes rondwerpt, spiegelende dansvloer, schaduwen, rook, lichtbundels, moving heads, lasers en een stroboscoop
+- Een club eromheen: bar, lounge, neon, pilaren, podium met led-wand en publiek
+- Camera die wisselt tussen rondjes, stilstaande zooms, rijders en af en toe een vlucht tussen de dansers door
+
+Download `SamSo-DiscoClub.zip` bij [Releases](../../releases); de handleiding zit in de zip. Zelf bouwen: `sh disco-club/app/build.sh`. De app gebruikt dezelfde schil als de Fractualizer (`app/main.swift`) en [three.js](https://threejs.org) r128 (MIT-licentie, meegeleverd in `disco-club/lib`).
+
 ## SamSo-Fractualizer
 
 <img src="app/icon-preview.png" width="128" alt="SamSo-Fractualizer icoon">

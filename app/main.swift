@@ -119,6 +119,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var window: NSWindow!
     var webView: WKWebView!
     let tap = AudioTap()
+    // Dezelfde schil dient voor meerdere visualizers: naam en ontwikkelmap komen uit Info.plist
+    let appName = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "SamSo-Fractualizer"
+    let devFolder = Bundle.main.object(forInfoDictionaryKey: "SamSoDevFolder") as? String ?? "fractal-visualizer"
 
     func applicationDidFinishLaunching(_ note: Notification) {
         let cfg = WKWebViewConfiguration()
@@ -128,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
-        window.title = "SamSo-Fractualizer"
+        window.title = appName
         window.backgroundColor = .black
         window.collectionBehavior = [.fullScreenPrimary]
         window.contentView = webView
@@ -140,7 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let menu = NSMenu()
         let appItem = NSMenuItem()
         appItem.submenu = NSMenu()
-        appItem.submenu!.addItem(withTitle: "Stop SamSo-Fractualizer", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu!.addItem(withTitle: "Stop \(appName)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(appItem)
         let viewItem = NSMenuItem()
         viewItem.submenu = NSMenu(title: "Weergave")
@@ -153,7 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         // (alleen in de ontwikkelmap, zodat een gedeelde app nooit een vreemde index.html laadt)
         let parent = Bundle.main.bundleURL.deletingLastPathComponent()
         let sibling = parent.appendingPathComponent("index.html")
-        let useSibling = parent.lastPathComponent == "fractal-visualizer" && FileManager.default.fileExists(atPath: sibling.path)
+        let useSibling = parent.lastPathComponent == devFolder && FileManager.default.fileExists(atPath: sibling.path)
         let html = useSibling ? sibling : Bundle.main.url(forResource: "index", withExtension: "html")!
         webView.loadFileURL(html, allowingReadAccessTo: html.deletingLastPathComponent())
 
