@@ -2,11 +2,11 @@
 
 Audio-visualizers van SamSo.
 
-## SamSo-LiquidLight (testversie)
+## SamsOil-projector (testversie)
 
-<img src="liquid-light/app/icon-preview.png" width="128" alt="SamSo-LiquidLight icoon">
+<img src="samsoil-projector/app/icon-preview.png" width="128" alt="SamsOil-projector icoon">
 
-Een vloeistofshow zoals de lichtshows uit de jaren zestig (denk aan de Joshua Light Show), die beweegt op de muziek die je Mac afspeelt. Staat in de map [`liquid-light`](liquid-light).
+Een vloeistofshow zoals de lichtshows uit de jaren zestig (denk aan de Joshua Light Show), die beweegt op de muziek die je Mac afspeelt. Staat in de map [`samsoil-projector`](samsoil-projector).
 
 - Een echte vloeistofsimulatie: verf, olie en water die langzaam door elkaar worden geroerd tot gemarmerde banden
 - Honderden oliedruppels die met de stroming meedrijven, kunnen groeien, en af en toe een reuzenbel die uiteenspat
@@ -14,7 +14,7 @@ Een vloeistofshow zoals de lichtshows uit de jaren zestig (denk aan de Joshua Li
 - Kleuren die geleidelijk verschuiven, en een sterrenhemel-modus met melkweg, planeten en diepte
 - Alles willekeurig, ook automatisch van elke 10 seconden tot elke 2 minuten, met overgangen via zwart
 
-Download `SamSo-LiquidLight.zip` bij [Releases](../../releases); de handleiding zit in de zip. Zelf bouwen: `sh liquid-light/app/build.sh`.
+Download `SamsOil-projector.zip` bij [Releases](../../releases); de handleiding zit in de zip. Zelf bouwen: `sh samsoil-projector/app/build.sh`.
 
 ## SamSo-DiscoClub (testversie)
 

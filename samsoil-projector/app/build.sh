@@ -1,8 +1,8 @@
 #!/bin/sh
-# Bouwt SamSo-LiquidLight.app naast index.html, met dezelfde app-schil als de Fractualizer (../../app/main.swift)
+# Bouwt SamsOil-projector.app naast index.html, met dezelfde app-schil als de Fractualizer (../../app/main.swift)
 set -e
 cd "$(dirname "$0")"
-NAME="SamSo-LiquidLight"
+NAME="SamsOil-projector"
 APP="../$NAME.app"
 T=$(mktemp -d)
 
@@ -32,18 +32,18 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key><string>$NAME</string>
-  <key>CFBundleIdentifier</key><string>nl.debox.samso-liquidlight</string>
+  <key>CFBundleIdentifier</key><string>nl.debox.samsoil-projector</string>
   <key>CFBundleExecutable</key><string>$NAME</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
-  <key>SamSoDevFolder</key><string>liquid-light</string>
+  <key>SamSoDevFolder</key><string>samsoil-projector</string>
 </dict>
 </plist>
 EOF
-codesign --force --sign - --identifier nl.debox.samso-liquidlight "$APP"
+codesign --force --sign - --identifier nl.debox.samsoil-projector "$APP"
 
 # zip om te delen: map met de app en de handleiding
 mkdir "$T/$NAME"
