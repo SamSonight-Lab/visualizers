@@ -2,6 +2,20 @@
 
 Audio-visualizers van SamSo.
 
+## SamSo-LiquidLight (testversie)
+
+<img src="liquid-light/app/icon-preview.png" width="128" alt="SamSo-LiquidLight icoon">
+
+Een vloeistofshow zoals de lichtshows uit de jaren zestig (denk aan de Joshua Light Show), die beweegt op de muziek die je Mac afspeelt. Staat in de map [`liquid-light`](liquid-light).
+
+- Een echte vloeistofsimulatie: verf, olie en water die langzaam door elkaar worden geroerd tot gemarmerde banden
+- Honderden oliedruppels die met de stroming meedrijven, kunnen groeien, en af en toe een reuzenbel die uiteenspat
+- Op de bas wordt het glas ingedrukt en waaiert de verf als een bloem uit
+- Kleuren die geleidelijk verschuiven, en een sterrenhemel-modus met melkweg, planeten en diepte
+- Alles willekeurig, ook automatisch van elke 10 seconden tot elke 2 minuten, met overgangen via zwart
+
+Download `SamSo-LiquidLight.zip` bij [Releases](../../releases); de handleiding zit in de zip. Zelf bouwen: `sh liquid-light/app/build.sh`.
+
 ## SamSo-DiscoClub (testversie)
 
 <img src="disco-club/app/icon-preview.png" width="128" alt="SamSo-DiscoClub icoon">

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SamSo-LiquidLight – Handleiding</title>
+<style>
+  body { font: 16px/1.55 -apple-system, system-ui, sans-serif; color: #1c1c1e; background: #fff; max-width: 720px; margin: 0 auto; padding: 32px 20px 60px; }
+  h1 { font-size: 30px; margin: 0 0 4px; }
+  h2 { font-size: 21px; margin: 36px 0 8px; padding-top: 14px; border-top: 1px solid #ddd; }
+  h3 { font-size: 17px; margin: 22px 0 4px; }
+  .sub { color: #666; margin: 0 0 20px; }
+  ol, ul { padding-left: 24px; }
+  li { margin: 5px 0; }
+  kbd { font: 13px ui-monospace, Menlo, monospace; background: #f1f1f4; border: 1px solid #ccc; border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid #e5e5e5; vertical-align: top; }
+  th { font-size: 13px; color: #666; font-weight: 600; }
+  td:first-child { white-space: nowrap; }
+  .note { background: #f4f7ff; border-left: 4px solid #5b8def; padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1c1c1e; color: #eee; }
+    h2 { border-color: #444; }
+    .sub, th { color: #aaa; }
+    kbd { background: #2c2c2e; border-color: #555; }
+    th, td { border-color: #3a3a3c; }
+    .note { background: #23283a; }
+  }
+</style>
+</head>
+<body>
+
+<h1>SamSo-LiquidLight</h1>
+<p class="sub">Een vloeistofshow uit de jaren zestig die beweegt op de muziek die je Mac afspeelt. Handleiding, testversie 0.1.</p>
+
+<p>SamSo-LiquidLight luistert naar al het geluid dat je Mac afspeelt (Spotify, Apple Music, YouTube, Ableton, alles) en laat een vloeistofshow daarop reageren. Je hoeft geen kabels of extra software te installeren.</p>
+
+<h2>Wat je nodig hebt</h2>
+<ul>
+  <li>Een Mac met macOS 13 (Ventura) of nieuwer.</li>
+  <li>Apple Silicon (M1 en later) of Intel. Op oudere Macs kan het beeld haperen.</li>
+</ul>
+
+<h2>Installeren</h2>
+<ol>
+  <li>Dubbelklik op <b>SamSo-LiquidLight.zip</b>. Er verschijnt een map <b>SamSo-LiquidLight</b>.</li>
+  <li>Sleep <b>SamSo-LiquidLight</b> (het icoon met de gemarmerde verf) naar je map <b>Programma's</b>.</li>
+</ol>
+
+<h2>De eerste keer openen</h2>
+<p>De app is niet via de App Store verspreid. macOS houdt hem daarom de eerste keer tegen. Dat is normaal en hoeft maar één keer opgelost te worden.</p>
+<ol>
+  <li>Dubbelklik op SamSo-LiquidLight in Programma's. macOS meldt dat de app niet geopend kan worden. Klik op <b>Gereed</b> (of <b>OK</b>).</li>
+  <li>Open <b>Systeeminstellingen</b> en ga naar <b>Privacy en beveiliging</b>.</li>
+  <li>Scrol naar beneden tot je de melding over SamSo-LiquidLight ziet en klik op <b>Open toch</b>.</li>
+  <li>Bevestig met je wachtwoord of Touch ID en klik nogmaals op <b>Open toch</b>.</li>
+</ol>
+<p>Op macOS 13 en 14 kan het korter: houd <kbd>Control</kbd> ingedrukt, klik op de app, kies <b>Open</b> en bevestig.</p>
+
+<h2>Toestemming voor het geluid</h2>
+<p>De app heeft toestemming nodig om het geluid van je Mac te horen. Zonder die toestemming reageert de vloeistof niet op de muziek en linksboven staat "geen toegang tot systeemaudio".</p>
+<ol>
+  <li>Open <b>Systeeminstellingen</b> › <b>Privacy en beveiliging</b> › <b>Scherm- en systeemaudio-opname</b>. De knop <b>Open privacy-instellingen</b> in de app brengt je daar direct naartoe.</li>
+  <li>Staat SamSo-LiquidLight in de bovenste lijst, zet dan het schuifje aan.</li>
+  <li>Staat hij er niet in: klik onder de lijst op het plusje <b>+</b>, druk op <kbd>Shift</kbd> + <kbd>Command</kbd> + <kbd>A</kbd> om naar Programma's te springen, kies <b>SamSo-LiquidLight</b> en klik op <b>Open</b>.</li>
+  <li>Sluit de app met <kbd>Command</kbd> + <kbd>Q</kbd> en open hem opnieuw. De toestemming werkt pas na een herstart.</li>
+</ol>
+<p>Het werkt als linksboven <b>systeemaudio</b> staat en de drie blauwe metertjes meebewegen met de muziek.</p>
+<div class="note">
+  macOS noemt deze toestemming "scherm- en systeemaudio-opname" omdat beide onder dezelfde schakelaar vallen. SamSo-LiquidLight gebruikt alleen het geluid. Er wordt niets opgenomen, opgeslagen of verstuurd. macOS kan je af en toe herinneren dat de app deze toestemming heeft; kies dan <b>Sta toe</b>.
+</div>
+
+<h2>Gebruiken</h2>
+<p>Zet muziek aan en open de app. Je ziet een vloeistofshow zoals de lichtshows uit de jaren zestig: gekleurde verf, olie en water die langzaam door elkaar worden geroerd, met druppels olie die meedrijven. Op de bas drukt een denkbeeldige lichtkunstenaar het glas in, zodat de verf als een bloem uitwaaiert. Af en toe zwelt een druppel op tot een reuzenbel die uiteenspat.</p>
+<p>Het bedieningspaneel staat linksboven. Het verdwijnt samen met de muiswijzer als je de muis 10 seconden niet beweegt, en komt terug zodra je de muis beweegt.</p>
+
+<h3>Het paneel</h3>
+<table>
+  <tr><th>Onderdeel</th><th>Wat het doet</th></tr>
+  <tr><td>Modus</td><td>Projectie (de vloeistof zoals op de muur) of sterrenhemel: alleen de lichte delen zweven over een ruimte met melkweg, sterren en planeten, met diepte.</td></tr>
+  <tr><td>Kleuren</td><td>Vuur, zee, roze en blauw, of regenboog.</td></tr>
+  <tr><td>Kleuren verschuiven</td><td>Gaat om de zoveel tijd geleidelijk over op het volgende kleurenpalet.</td></tr>
+  <tr><td>Druppels groeien</td><td>Druppels zwellen langzaam aan; af en toe groeit er een uit tot een reuzenbel die ontploft.</td></tr>
+  <tr><td>Zwart-wit</td><td>Toont het beeld in grijstinten.</td></tr>
+  <tr><td>Roeren, Druppels, Snelheid, Gevoeligheid</td><td>Hoe hard er geroerd wordt, hoeveel druppels er zijn, hoe snel alles beweegt en hoe sterk het beeld op de muziek reageert.</td></tr>
+  <tr><td>Nieuwe schaal</td><td>Begint opnieuw met verse verf.</td></tr>
+  <tr><td>Alles willekeurig</td><td>Loot in één keer kleuren, modus, roeren, druppels en tempo. De wissel gaat via een korte fade over zwart.</td></tr>
+  <tr><td>Auto-willekeurig</td><td>Doet dat vanzelf, in te stellen van elke 10 seconden tot elke 2 minuten.</td></tr>
+</table>
+
+<h3>Toetsen</h3>
+<table>
+  <tr><th>Toets</th><th>Actie</th></tr>
+  <tr><td><kbd>F</kbd></td><td>Volledig scherm aan of uit</td></tr>
+  <tr><td><kbd>S</kbd></td><td>Wisselen tussen projectie en sterrenhemel</td></tr>
+  <tr><td><kbd>N</kbd></td><td>Nieuwe schaal</td></tr>
+  <tr><td><kbd>X</kbd></td><td>Alles willekeurig</td></tr>
+  <tr><td><kbd>P</kbd></td><td>Volgende kleurenset</td></tr>
+  <tr><td><kbd>G</kbd></td><td>Druppels groeien aan of uit</td></tr>
+  <tr><td><kbd>B</kbd></td><td>Zwart-wit aan of uit</td></tr>
+  <tr><td><kbd>H</kbd></td><td>Paneel direct verbergen of tonen</td></tr>
+  <tr><td><kbd>Command</kbd> + <kbd>Q</kbd></td><td>App afsluiten</td></tr>
+</table>
+<p>Je instellingen worden bewaard en staan er de volgende keer weer.</p>
+
+<h2>Problemen oplossen</h2>
+<table>
+  <tr><th>Wat je ziet</th><th>Oplossing</th></tr>
+  <tr><td>"geen toegang tot systeemaudio"</td><td>Volg de stappen bij "Toestemming voor het geluid" en herstart de app.</td></tr>
+  <tr><td>Schuifje staat aan, toch geen toegang</td><td>Selecteer SamSo-LiquidLight in de lijst, klik op het minnetje <b>−</b>, voeg hem opnieuw toe met het plusje <b>+</b> en herstart de app. Dit kan nodig zijn na het installeren van een nieuwe versie.</td></tr>
+    <tr><td>"systeemaudio", maar de metertjes bewegen niet</td><td>Controleer of er echt geluid speelt op deze Mac en of het volume niet op nul staat.</td></tr>
+  <tr><td>Het beeld hapert</td><td>Maak het venster kleiner of kies de modus projectie.</td></tr>
+</table>
+
+<h2>Verwijderen</h2>
+<p>Sleep SamSo-LiquidLight uit Programma's naar de prullenmand. De toestemming haal je weg in Systeeminstellingen › Privacy en beveiliging › Scherm- en systeemaudio-opname: selecteer de app en klik op het minnetje <b>−</b>.</p>
+
+</body>
+</html>

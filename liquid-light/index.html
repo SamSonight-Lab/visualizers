@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SamSo Liquid Light</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font: 13px -apple-system, system-ui, sans-serif; color: #ddd; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #ui { position: fixed; left: 16px; top: 16px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; max-width: calc(100vw - 32px); box-sizing: border-box;
+        background: rgba(0,0,0,.6); padding: 10px 12px; border-radius: 10px; backdrop-filter: blur(8px); transition: opacity .4s; }
+  #ui.hidden { opacity: 0; pointer-events: none; }
+  button, select { font: inherit; color: #eee; background: #222; border: 1px solid #444; border-radius: 6px; padding: 5px 9px; cursor: pointer; }
+  button:hover { background: #333; }
+  label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 90px; height: 4px; background: #555; border-radius: 2px; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #ffb347; }
+  input[type=checkbox] { accent-color: #ffb347; margin: 0; }
+  label span { min-width: 2.6em; opacity: .7; font-variant-numeric: tabular-nums; }
+  #status { opacity: .7; flex-basis: 100%; }
+  #meters { display: flex; gap: 3px; align-items: flex-end; height: 24px; }
+  #meters i { width: 6px; background: #ffb347; border-radius: 2px; height: 2px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <button id="btnSys">Systeemaudio (scherm/tab delen)</button>
+  <select id="devices"><option value="">Audio-invoer…</option></select>
+  <select id="mode">
+    <option value="projectie">Modus: projectie</option>
+    <option value="sterren">Modus: sterrenhemel</option>
+  </select>
+  <select id="palette">
+    <option value="vuur">Kleuren: vuur</option>
+    <option value="zee">Kleuren: zee</option>
+    <option value="roze">Kleuren: roze en blauw</option>
+    <option value="regenboog">Kleuren: regenboog</option>
+  </select>
+  <label><input type="checkbox" id="shift"> Kleuren verschuiven</label>
+  <label><input type="checkbox" id="grow"> Druppels groeien</label>
+  <label><input type="checkbox" id="mono"> Zwart-wit</label>
+  <label>Roeren <input type="range" id="stir" min="0" max="2.5" step="0.05"><span id="stirV"></span></label>
+  <label>Druppels <input type="range" id="drops" min="0" max="2" step="0.05"><span id="dropsV"></span></label>
+  <label>Snelheid <input type="range" id="speed" min="0.2" max="5" step="0.05"><span id="speedV"></span></label>
+  <label>Gevoeligheid <input type="range" id="sens" min="0" max="2" step="0.05"><span id="sensV"></span></label>
+  <button id="btnNew">Nieuwe schaal</button>
+  <button id="btnAll">Alles willekeurig</button>
+  <label><input type="checkbox" id="autoOn"> Auto-willekeurig, elke <input type="range" id="autoSec" min="10" max="120" step="5"><span id="autoSecV"></span></label>
+  <button id="btnFull">Volledig scherm</button>
+  <div id="meters"><i></i><i></i><i></i></div>
+  <span id="status">demo-beat (nog geen audio)</span>
+</div>
+
+<script>
+// SamSo Liquid Light: een vloeistofshow zoals de Joshua Light Show uit 1969.
+// Op een overheadprojector liggen glazen schalen met water, olie, glycerine en verf. Door roeren ontstaan gemarmerde banden,
+// door het glas in te drukken waaiert de verf als een bloem uit, en overal drijven druppeltjes olie mee.
+const $ = id => document.getElementById(id);
+const status = $('status');
+const rnd = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+
+const S = { mode: 'projectie', palette: 'vuur', mono: false, stir: 1, drops: 1, speed: 1, sens: 1, grow: true, autoOn: false, autoSec: 60, shift: true };
+try { Object.assign(S, JSON.parse(localStorage.getItem('joshua') || '{}')); } catch (e) {}
+if (S.auto > 0) { S.autoOn = true; S.autoSec = Math.min(120, S.auto); } delete S.auto;
+function save() { try { localStorage.setItem('joshua', JSON.stringify(S)); } catch (e) {} }
+
+// --- WebGL2 ---
+const canvas = $('c');
+const gl = canvas.getContext('webgl2', { alpha: false, antialias: false });
+if (!gl || !gl.getExtension('EXT_color_buffer_float')) status.textContent = 'deze browser ondersteunt de benodigde WebGL2-functies niet';
+gl.getExtension('OES_texture_float_linear');
+
+const VERT = `#version 300 es
+in vec2 a; uniform vec2 texel; out vec2 vUv, vL, vR, vT, vB;
+void main() { vUv = a * 0.5 + 0.5; vL = vUv - vec2(texel.x, 0.0); vR = vUv + vec2(texel.x, 0.0); vT = vUv + vec2(0.0, texel.y); vB = vUv - vec2(0.0, texel.y); gl_Position = vec4(a, 0.0, 1.0); }`;
+const HEAD = '#version 300 es\nprecision highp float; precision highp sampler2D;\nin vec2 vUv, vL, vR, vT, vB; out vec4 o;\n';
+const FRAG = {
+  // verf in de schaal: kleur als absorptie (wat de verf uit het lamplicht haalt). petals > 0 geeft een bloem met spitse uitlopers.
+  splat: `uniform sampler2D uTarget; uniform float aspect, radius, soft, petals, seed, replace; uniform vec4 color; uniform vec2 point;
+    void main() { vec2 p = vUv - point; p.x *= aspect;
+      float ang = atan(p.y, p.x), d = length(p);
+      float r = radius * (1.0 + petals * (0.35 * sin(ang * 9.0 + seed) + 0.25 * sin(ang * 23.0 + seed * 2.3) + 0.15 * sin(ang * 41.0 + seed * 5.1)));
+      float m = 1.0 - smoothstep(r * (1.0 - soft), r, d);
+      vec4 old = texture(uTarget, vUv);
+      o = replace > 0.5 ? mix(old, color, m) : old + color * m; }`,
+  push: `uniform sampler2D uTarget; uniform float aspect, radius, swirl; uniform vec2 point, force;
+    void main() { vec2 p = vUv - point; p.x *= aspect; float d = dot(p, p), w = exp(-d / radius);
+      vec2 radial = p / (sqrt(d) + 1e-4), f = mix(force, radial * force.x, swirl) * w;  // swirl = 1: radiaal naar buiten met sterkte force.x
+      o = texture(uTarget, vUv) + vec4(f, 0.0, 0.0); }`,
+  advect: `uniform sampler2D uVelocity, uSource; uniform vec2 velTexel; uniform float dt, dissipation;
+    void main() { vec2 c = vUv - dt * texture(uVelocity, vUv).xy * velTexel; o = texture(uSource, c) / (1.0 + dissipation * dt); }`,
+  maccormack: `uniform sampler2D uVelocity, uSource, uFwd, uBwd; uniform vec2 velTexel, srcTexel; uniform float dt, dissipation;
+    void main() {
+      vec2 c = vUv - dt * texture(uVelocity, vUv).xy * velTexel;
+      vec4 r = texture(uFwd, vUv) + 0.5 * (texture(uSource, vUv) - texture(uBwd, vUv));
+      vec2 b = (floor(c / srcTexel - 0.5) + 0.5) * srcTexel;  // de vier bronpixels: corrigeer niet buiten hun bereik
+      vec4 n1 = texture(uSource, b), n2 = texture(uSource, b + vec2(srcTexel.x, 0.0)), n3 = texture(uSource, b + vec2(0.0, srcTexel.y)), n4 = texture(uSource, b + srcTexel);
+      o = clamp(r, min(min(n1, n2), min(n3, n4)), max(max(n1, n2), max(n3, n4))) / (1.0 + dissipation * dt); }`,
+  curl: `uniform sampler2D uVelocity;
+    void main() { o = vec4(0.5 * (texture(uVelocity, vR).y - texture(uVelocity, vL).y - texture(uVelocity, vT).x + texture(uVelocity, vB).x), 0.0, 0.0, 1.0); }`,
+  vorticity: `uniform sampler2D uVelocity, uCurl; uniform float curl, dt;
+    void main() { float L = texture(uCurl, vL).x, R = texture(uCurl, vR).x, T = texture(uCurl, vT).x, B = texture(uCurl, vB).x, C = texture(uCurl, vUv).x;
+      vec2 f = 0.5 * vec2(abs(T) - abs(B), abs(R) - abs(L)); f /= length(f) + 1e-4; f *= curl * C; f.y *= -1.0;
+      o = vec4(texture(uVelocity, vUv).xy + f * dt, 0.0, 1.0); }`,
+  divergence: `uniform sampler2D uVelocity;
+    void main() { float L = texture(uVelocity, vL).x, R = texture(uVelocity, vR).x, T = texture(uVelocity, vT).y, B = texture(uVelocity, vB).y;
+      vec2 C = texture(uVelocity, vUv).xy;
+      if (vL.x < 0.0) L = -C.x; if (vR.x > 1.0) R = -C.x; if (vT.y > 1.0) T = -C.y; if (vB.y < 0.0) B = -C.y;
+      o = vec4(0.5 * (R - L + T - B), 0.0, 0.0, 1.0); }`,
+  scale: `uniform sampler2D uTarget; uniform float value; void main() { o = value * texture(uTarget, vUv); }`,
+  copy: `uniform sampler2D uTarget; void main() { o = texture(uTarget, vUv); }`,
+  // sterrenhemel met het gekeyde beeld erover; het vorige beeld trekt steeds iets kleiner en gedraaid de diepte in
+  // de ruimte: melkweg met stofbanen, nevels, sterren in lagen die op je afkomen en planeten; het gekeyde vloeistofbeeld
+  // eroverheen, waarvan het vorige beeld steeds iets verkleind, gedraaid en verschoven de diepte in trekt
+  space: `uniform sampler2D uPrev; uniform vec2 res, center, drift; uniform float time, zoom, rotA, decay, fly;
+    uniform vec4 uPlanet[2]; uniform vec3 uPlanetA[2], uPlanetB[2]; uniform float uPlanetRing[2];
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float noise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x), mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y); }
+    float fbm(vec2 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * noise(p); p = mat2(1.6, 1.2, -1.2, 1.6) * p; a *= 0.5; } return s; }
+    mat2 rot(float a) { float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+    float starCell(vec2 g, float t) {
+      vec2 i = floor(g), f = fract(g) - 0.5;
+      float h = hash(i), on = step(0.9, h);
+      vec2 o = vec2(hash(i + 7.1), hash(i + 3.3)) - 0.5;
+      return on * (0.65 + 0.35 * sin(t * (1.0 + 3.0 * h) + h * 40.0)) * smoothstep(0.09, 0.0, length(f - o * 0.7)) * (0.4 + h);
+    }
+    // vijf lagen sterren die steeds dichterbij komen: verre zijn klein en zwak, nabije groot en fel
+    float stars(vec2 c) {
+      float s = 0.0;
+      for (int i = 0; i < 5; i++) {
+        float z = fract(float(i) * 0.2 + fly);
+        float fade = smoothstep(0.0, 0.25, z) * (1.0 - smoothstep(0.8, 1.0, z));
+        s += starCell(c * mix(34.0, 3.0, z) + float(i) * 13.7, time) * fade * (0.35 + 0.9 * z);
+      }
+      return s;
+    }
+    vec3 milkyWay(vec2 c) {
+      vec2 p = rot(0.55) * (c - drift * 0.15);
+      float band = exp(-p.y * p.y / 0.06), n = fbm(p * 2.2 + vec2(time * 0.002, 0.0)), dust = fbm(p * 5.5 + 3.0);
+      float b = band * (0.3 + 0.7 * n) * (1.0 - 0.8 * smoothstep(0.42, 0.72, dust) * band);
+      vec3 col = mix(vec3(0.22, 0.27, 0.6), vec3(1.0, 0.78, 0.55), smoothstep(0.25, 0.85, band * n)) * b * 0.34;
+      col += vec3(0.55, 0.12, 0.42) * pow(fbm(c * 1.4 - time * 0.002 + 5.0), 3.0) * 0.22;  // roze nevel
+      col += vec3(0.08, 0.3, 0.55) * pow(fbm(c * 1.1 + 11.0 + time * 0.0015), 3.0) * 0.18;  // blauwe nevel
+      return col;
+    }
+    vec4 planet(vec2 c, vec4 P, vec3 A, vec3 B, float ring) {
+      if (P.w <= 0.0) return vec4(0.0);
+      vec2 d = (c - P.xy) / P.z;
+      float r2 = dot(d, d);
+      vec4 res = vec4(0.0);
+      if (r2 < 1.0) {
+        float z = sqrt(1.0 - r2);
+        vec3 n = vec3(d, z);
+        float lit = clamp(dot(n, normalize(vec3(-0.55, 0.45, 0.7))), 0.0, 1.0);
+        float bands = 0.5 + 0.5 * sin(d.y * 13.0 + fbm(d * 3.0 + P.z * 4.0) * 4.0);
+        vec3 col = mix(A, B, bands) * (0.04 + 1.15 * pow(lit, 0.9));
+        col += vec3(0.45, 0.65, 1.0) * pow(1.0 - z, 4.0) * lit * 0.8;  // dampkring aan de rand
+        res = vec4(col, 1.0);
+      } else res = vec4(vec3(0.35, 0.55, 1.0) * exp(-(sqrt(r2) - 1.0) * 10.0) * 0.35, 0.0);  // gloed eromheen
+      if (ring > 0.5) {
+        float rr = length(vec2(d.x, d.y * 3.4));
+        float band = smoothstep(1.35, 1.45, rr) * (1.0 - smoothstep(2.05, 2.2, rr)) * (0.55 + 0.45 * sin(rr * 38.0));
+        if (band > 0.0 && (d.y < 0.0 || r2 > 1.0)) res = vec4(mix(res.rgb, mix(A, B, 0.5) * 0.85, band * 0.85), max(res.a, band * 0.85));
+      }
+      return res * P.w;
+    }
+    void main() {
+      vec2 c = (gl_FragCoord.xy - 0.5 * res) / res.y;
+      vec3 sky = vec3(0.002, 0.003, 0.01) + milkyWay(c) + vec3(0.9, 0.93, 1.0) * stars(c - drift * 0.4) * 1.3;
+      for (int i = 0; i < 2; i++) { vec4 pl = planet(c, uPlanet[i], uPlanetA[i], uPlanetB[i], uPlanetRing[i]); sky = sky * (1.0 - pl.a) + pl.rgb; }
+      vec2 q = vUv - 0.5 - center;
+      q.x *= res.x / res.y;
+      float cs = cos(rotA), sn = sin(rotA);
+      q = mat2(cs, -sn, sn, cs) * q * zoom;
+      q.x /= res.x / res.y;
+      o = vec4(max(sky, texture(uPrev, q + 0.5 + center).rgb * decay), 1.0);  // eigen feedback van de lucht: sterren trekken sporen
+    }`,
+  // eigen feedback van het vloeistofbeeld, los van die van de lucht
+  fbk: `uniform sampler2D uCur, uPrev; uniform vec2 res, center; uniform float zoom, rotA, decay;
+    void main() {
+      vec2 q = vUv - 0.5 - center;
+      q.x *= res.x / res.y;
+      float cs = cos(rotA), sn = sin(rotA);
+      q = mat2(cs, -sn, sn, cs) * q * zoom;
+      q.x /= res.x / res.y;
+      o = vec4(max(texture(uCur, vUv).rgb, texture(uPrev, q + 0.5 + center).rgb * decay), 1.0);
+    }`,
+  compose: `uniform sampler2D uSky, uLight; void main() { vec3 l = texture(uLight, vUv).rgb; o = vec4(texture(uSky, vUv).rgb * (1.0 - clamp(dot(l, vec3(0.6)), 0.0, 1.0)) + l, 1.0); }`,
+  dim: `uniform float g; void main() { o = vec4(0.0, 0.0, 0.0, 1.0 - g); }`,
+  pressure: `uniform sampler2D uPressure, uDivergence;
+    void main() { o = vec4((texture(uPressure, vL).x + texture(uPressure, vR).x + texture(uPressure, vB).x + texture(uPressure, vT).x - texture(uDivergence, vUv).x) * 0.25, 0.0, 0.0, 1.0); }`,
+  gradient: `uniform sampler2D uPressure, uVelocity;
+    void main() { o = vec4(texture(uVelocity, vUv).xy - vec2(texture(uPressure, vR).x - texture(uPressure, vL).x, texture(uPressure, vT).x - texture(uPressure, vB).x), 0.0, 1.0); }`,
+  // projectie zoals op film: lamplicht door de verf, felle plekken gloeien uit, zacht beeld, donkere hoeken, korrel
+  display: `uniform sampler2D uDye; uniform vec2 res; uniform float time, flicker, mono, bass, key;
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    vec3 light(vec2 uv) { return vec3(1.0, 0.94, 0.8) * exp(-texture(uDye, uv).rgb * 1.7); }  // dichte verf: diepe, verzadigde kleuren zoals op de filmbeelden
+    void main() {
+      vec2 px = 1.0 / res;
+      vec3 col = light(vUv) * 0.5;
+      for (int i = 0; i < 6; i++) { float a = float(i) * 1.0472; col += light(vUv + 1.6 * px * vec2(cos(a), sin(a))) * (0.5 / 6.0); }  // iets zacht, zoals geprojecteerd
+      vec3 glow = vec3(0.0);
+      for (int i = 0; i < 12; i++) {  // gloed rond de felste plekken
+        float a = float(i) * 0.5236 + 0.3, r = 0.02 + 0.025 * float(i % 3);
+        vec3 c = light(vUv + r * vec2(cos(a) * res.y / res.x, sin(a)));
+        glow += max(c - 0.55, 0.0);
+      }
+      col += glow / 12.0 * 0.9;
+      vec2 q = vUv - 0.5;
+      col *= (1.0 - 1.1 * dot(q * vec2(res.x / res.y, 1.0), q * vec2(res.x / res.y, 1.0)) * 0.55) * flicker * (0.96 + 0.08 * bass);
+      col = pow(col, vec3(1.08));
+      col = mix(col, vec3(dot(col, vec3(0.299, 0.587, 0.114))), mono);
+      if (key > 0.5) {  // sterrenhemel-modus: alleen de lichte delen blijven, de rest wordt doorzichtig
+        float l = dot(col, vec3(0.299, 0.587, 0.114));
+        o = vec4(col * (0.02 + pow(smoothstep(0.55, 0.95, l), 2.0)), 1.0);  // alleen de felste hoogtepunten
+        return;
+      }
+      col += (hash(gl_FragCoord.xy + time * 61.0) - 0.5) * 0.04;  // filmkorrel
+      col *= 1.0 - step(0.9994, hash(floor(gl_FragCoord.xy / 3.0) + floor(time * 9.0))) * 0.7;  // stofjes
+      o = vec4(max(col, 0.0), 1.0);
+    }`,
+};
+function compile(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+  return sh;
+}
+const vs = compile(gl.VERTEX_SHADER, VERT);
+const P = {};
+for (const [name, src] of Object.entries(FRAG)) {
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, HEAD + src));
+  gl.bindAttribLocation(prog, 0, 'a');
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  const u = {};
+  for (let i = 0; i < gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS); i++) { const n = gl.getActiveUniform(prog, i).name; u[n] = gl.getUniformLocation(prog, n); }
+  P[name] = { prog, u };
+}
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, -1, 1, 1, 1, 1, -1]), gl.STATIC_DRAW);
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array([0, 1, 2, 0, 2, 3]), gl.STATIC_DRAW);
+gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+gl.enableVertexAttribArray(0);
+
+function target(w, h, internal, format) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internal, w, h, 0, format, gl.HALF_FLOAT, null);
+  const fbo = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  gl.clearColor(0, 0, 0, 0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  return { tex, fbo, w, h, texel: [1 / w, 1 / h], bind(unit) { gl.activeTexture(gl.TEXTURE0 + unit); gl.bindTexture(gl.TEXTURE_2D, tex); return unit; } };
+}
+function double(w, h, internal, format) {
+  let a = target(w, h, internal, format), b = target(w, h, internal, format);
+  return { w, h, texel: a.texel, get read() { return a; }, get write() { return b; }, swap() { [a, b] = [b, a]; } };
+}
+function draw(dest, prog, uniforms) {
+  gl.useProgram(prog.prog);
+  const tex = dest ? dest.texel : [1 / canvas.width, 1 / canvas.height];
+  gl.uniform2f(prog.u.texel, tex[0], tex[1]);
+  for (const [k, v] of Object.entries(uniforms)) {
+    if (v instanceof Float32Array) {
+      const arr = prog.u[k + '[0]'];
+      if (arr) gl[k === 'uPlanet' ? 'uniform4fv' : k === 'uPlanetRing' ? 'uniform1fv' : 'uniform3fv'](arr, v);
+      continue;
+    }
+    const loc = prog.u[k];
+    if (loc === undefined) continue;
+    if (v && v.bind) gl.uniform1i(loc, v.bind(v.unit));
+    else if (Array.isArray(v)) gl['uniform' + v.length + 'f'](loc, ...v);
+    else gl.uniform1f(loc, v);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, dest ? dest.fbo : null);
+  gl.viewport(0, 0, dest ? dest.w : canvas.width, dest ? dest.h : canvas.height);
+  gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+}
+const T = (t, unit) => Object.assign(Object.create(t), { unit });  // textuur op een bepaalde texture-unit
+
+let velocity, pressure, divergence, curlT, dye, fwd, bwd, aspect = 1;
+const PR = Math.min(window.devicePixelRatio || 1, 1.5);
+function resize() {
+  canvas.width = Math.floor(innerWidth * PR);
+  canvas.height = Math.floor(innerHeight * PR);
+  aspect = canvas.width / canvas.height;
+  const res = base => aspect >= 1 ? [Math.round(base * aspect), base] : [base, Math.round(base / aspect)];
+  const [sw, sh] = res(150), [dw, dh] = res(1000);
+  velocity = double(sw, sh, gl.RG16F, gl.RG);
+  pressure = double(sw, sh, gl.R16F, gl.RED);
+  divergence = target(sw, sh, gl.R16F, gl.RED);
+  curlT = target(sw, sh, gl.R16F, gl.RED);
+  dye = double(dw, dh, gl.RGBA16F, gl.RGBA);
+  fwd = target(dw, dh, gl.RGBA16F, gl.RGBA);
+  bwd = target(dw, dh, gl.RGBA16F, gl.RGBA);
+  velBuf = new Float32Array(sw * sh * 4);
+  stars = { cur: target(canvas.width, canvas.height, gl.RGBA16F, gl.RGBA), sky: double(canvas.width, canvas.height, gl.RGBA16F, gl.RGBA), light: double(canvas.width, canvas.height, gl.RGBA16F, gl.RGBA) };
+  newDish();
+}
+
+// --- Verf ---
+// verfkleur als het licht dat erdoor komt; absorptie = -log(kleur)
+const DYES = { rood: [0.95, 0.12, 0.05], oranje: [1, 0.45, 0.05], geel: [1, 0.9, 0.2], lila: [0.6, 0.45, 0.95], blauw: [0.15, 0.35, 1], cyaan: [0.2, 0.85, 1],
+               groen: [0.3, 0.85, 0.25], magenta: [0.95, 0.15, 0.65], wit: [1, 1, 0.95] };
+const PALETTES = { vuur: ['rood', 'oranje', 'geel', 'lila'], zee: ['cyaan', 'blauw', 'geel', 'groen'], roze: ['magenta', 'rood', 'blauw', 'geel'],
+                   regenboog: ['rood', 'oranje', 'geel', 'groen', 'cyaan', 'blauw', 'magenta'] };
+let colorTurn = 0;
+const nextColor = names => names[colorTurn++ % names.length];
+const absorb = (name, k) => [...DYES[name].map(c => -Math.log(Math.max(c, 0.03)) * k), 0];
+function paint(point, color, radius, opts = {}) {
+  draw(dye.write, P.splat, { uTarget: T(dye.read, 0), aspect, point, color, radius, soft: opts.soft ?? 0.3, petals: opts.petals ?? 0, seed: rnd(0, 100), replace: opts.replace ?? 1 });
+  dye.swap();
+}
+function push(point, force, radius, swirl = 0) {
+  draw(velocity.write, P.push, { uTarget: T(velocity.read, 0), aspect, point, force, radius, swirl });
+  velocity.swap();
+}
+// een verse schaal: horizontale lagen verf over elkaar; roeren maakt daar marmer van
+function newDish() {
+  // kleuren verschuiven: om de zoveel tijd neemt het volgende palet het over; een plens in de nieuwe kleur zet de overgang in
+  if (S.shift && time > nextShift) {
+    nextShift = time + rnd(35, 60);
+    const order = Object.keys(PALETTES);
+    S.palette = order[(order.indexOf(S.palette) + 1) % order.length];
+    syncUI();
+    nextPour = time;
+  }
+  const names = PALETTES[S.palette];
+  for (let y = -0.05; y < 1.05; y += rnd(0.05, 0.13)) {  // per laag één kleur, als een doorlopende band
+    const c = absorb(nextColor(names), rnd(0.7, 1.3)), w = rnd(0.03, 0.07), ph = rnd(0, 6);
+    for (let x = -0.1; x < 1.1; x += 0.012) paint([x, y + 0.025 * Math.sin(x * 6 + ph)], c, w, { soft: 0.5 });
+  }
+  for (let i = 0; i < 6; i++) paint([rnd(0.1, 0.9), rnd(0.1, 0.9)], absorb(pick(names), rnd(0.8, 1.4)), rnd(0.06, 0.16), { soft: 0.2, petals: Math.random() < 0.5 ? 0.6 : 0 });
+  droplets.length = 0;
+  warm = 50;
+  for (let i = 0; i < 6; i++) dropletCluster([rnd(0.1, 0.9), rnd(0.1, 0.9)], 25);
+}
+
+// --- Druppeltjes olie: ronde puntjes die met de stroming meedrijven (snelheid wordt elke paar frames uit de simulatie gelezen) ---
+const droplets = [];
+let velBuf = null;
+function dropletCluster(c, n) {
+  n = Math.round(n * S.drops);
+  for (let i = 0; i < n && droplets.length < 600; i++) {
+    const a = rnd(0, Math.PI * 2), d = Math.pow(Math.random(), 0.7) * rnd(0.02, 0.09);
+    droplets.push({ x: c[0] + d * Math.cos(a) / aspect, y: c[1] + d * Math.sin(a), size: Math.pow(Math.random(), 3) * 20 + 2.5, life: rnd(20, 60) * (S.grow ? 1.5 : 1), a: 0, age: 0, light: Math.random() < 0.3 });
+  }
+}
+function readVelocity() {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, velocity.read.fbo);
+  gl.readPixels(0, 0, velocity.w, velocity.h, gl.RGBA, gl.FLOAT, velBuf);
+}
+function moveDroplets(dt) {
+  const w = velocity.w, h = velocity.h;
+  for (let i = droplets.length - 1; i >= 0; i--) {
+    const d = droplets[i];
+    const gx = Math.min(w - 1, Math.max(0, Math.floor(d.x * w))), gy = Math.min(h - 1, Math.max(0, Math.floor(d.y * h))), k = (gy * w + gx) * 4;
+    d.x += velBuf[k] / w * dt + (d.vx || 0) * dt;
+    d.y += velBuf[k + 1] / h * dt + (d.vy || 0) * dt;
+    if (d.vx) { d.vx *= Math.exp(-dt * 2); d.vy *= Math.exp(-dt * 2); }
+    d.life -= dt;
+    d.age += dt;
+    if (d.giant) {  // de reuzendruppel zwelt steeds verder op tot hij het niet meer houdt
+      d.size *= 1 + dt * 0.09;
+      d.life = 10;
+      if (d.size > giantMax) { burst(d); droplets.splice(i, 1); continue; }
+    } else if (S.grow && d.age < 60) d.size *= 1 + dt * 0.022;  // groeit in een halve minuut tot ongeveer het dubbele
+    d.a += ((d.life > 0 ? 1 : 0) - d.a) * Math.min(1, dt * 1.5);
+    if ((d.life <= 0 && d.a < 0.02) || d.x < -0.05 || d.x > 1.05 || d.y < -0.05 || d.y > 1.05) droplets.splice(i, 1);
+  }
+}
+// De reuzendruppel: af en toe groeit één druppel extreem en spat dan uiteen in een explosie van kleur
+const giantMax = Math.min(380 * PR, gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1] * 0.95);
+let nextGiant = 25, flash = 0;
+function startGiant() {
+  const d = { x: rnd(0.3, 0.7), y: rnd(0.3, 0.7), size: 14, life: 10, a: 0, age: 0, light: true, giant: true };
+  if (droplets.length >= 600) droplets.shift();
+  droplets.push(d);
+}
+function burst(d) {
+  const names = PALETTES[S.palette], pt = [d.x, d.y], r = d.size / 2 / canvas.height;
+  // ringen van verf in verschillende kleuren, met spitse uitlopers
+  paint(pt, absorb(nextColor(names), rnd(1.4, 2)), r * 2.2, { petals: 0.9, soft: 0.25 });
+  paint(pt, absorb(nextColor(names), rnd(1.2, 1.8)), r * 1.4, { petals: 0.7, soft: 0.3 });
+  paint(pt, absorb(nextColor(names), rnd(1, 1.6)), r * 0.7, { petals: 0.5, soft: 0.4 });
+  push(pt, [900 * S.sens, 0], r * r * 6 + 0.004, 1);
+  // honderden druppeltjes die naar buiten worden geslingerd en dan weer gaan drijven
+  for (let i = 0; i < 140 && droplets.length < 600; i++) {
+    const a = rnd(0, Math.PI * 2), sp = rnd(0.05, 0.5) * (0.5 + r * 6);
+    droplets.push({ x: d.x + Math.cos(a) * r * 0.5 / aspect, y: d.y + Math.sin(a) * r * 0.5, vx: Math.cos(a) * sp / aspect, vy: Math.sin(a) * sp,
+                    size: Math.pow(Math.random(), 2.5) * 14 + 2, life: rnd(15, 45), a: 1, age: 0, light: Math.random() < 0.45 });
+  }
+  flash = 1;
+}
+// druppeltjes tekenen als kleine lenzen: helder hart, donkere rand
+const PVERT = `#version 300 es
+in vec4 aP; out float vA, vLight; void main() { gl_Position = vec4(aP.xy * 2.0 - 1.0, 0.0, 1.0); gl_PointSize = aP.z; vLight = step(1.5, aP.w); vA = aP.w - 2.0 * vLight; }`;
+const PFRAG = `#version 300 es
+precision highp float; in float vA, vLight; out vec4 o;
+void main() { vec2 p = gl_PointCoord * 2.0 - 1.0; float d = length(p); if (d > 1.0) discard;
+  float rim = smoothstep(0.6, 0.95, d), edge = 1.0 - smoothstep(0.9, 1.0, d);
+  float glint = exp(-dot(p - vec2(-0.3, 0.35), p - vec2(-0.3, 0.35)) * 18.0);  // klein lichtpuntje op de druppel
+  vec3 c = vLight > 0.5 ? mix(vec3(1.0, 0.92, 0.6), vec3(0.25, 0.1, 0.05), rim) : mix(vec3(0.08, 0.05, 0.14), vec3(0.02), rim);
+  float a = vA * edge * (vLight > 0.5 ? 0.75 : 0.8);
+  c += vec3(1.0) * glint * 0.6;
+  o = vec4(c * a, a); }`;
+const pProg = gl.createProgram();
+gl.attachShader(pProg, compile(gl.VERTEX_SHADER, PVERT));
+gl.attachShader(pProg, compile(gl.FRAGMENT_SHADER, PFRAG));
+gl.bindAttribLocation(pProg, 0, 'aP');
+gl.linkProgram(pProg);
+const pVAO = gl.createVertexArray(), pBuf = gl.createBuffer(), pData = new Float32Array(600 * 4);
+gl.bindVertexArray(pVAO);
+gl.bindBuffer(gl.ARRAY_BUFFER, pBuf);
+gl.bufferData(gl.ARRAY_BUFFER, pData.byteLength, gl.DYNAMIC_DRAW);
+gl.vertexAttribPointer(0, 4, gl.FLOAT, false, 0, 0);
+gl.enableVertexAttribArray(0);
+gl.bindVertexArray(null);
+function drawDroplets(dest) {
+  droplets.forEach((d, i) => pData.set([d.x, d.y, d.size * PR, d.a * 0.85 + (d.light ? 2 : 0)], i * 4));
+  gl.bindFramebuffer(gl.FRAMEBUFFER, dest ? dest.fbo : null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.useProgram(pProg);
+  gl.bindVertexArray(pVAO);
+  gl.bindBuffer(gl.ARRAY_BUFFER, pBuf);
+  gl.bufferSubData(gl.ARRAY_BUFFER, 0, pData, 0, droplets.length * 4);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+  gl.drawArrays(gl.POINTS, 0, droplets.length);
+  gl.disable(gl.BLEND);
+  gl.bindVertexArray(null);
+}
+
+// --- Audio (zelfde opzet als de andere visualizers) ---
+let ctx, analyser, bins, source, stream;
+const bands = [{ lo: 30, hi: 150, v: 0, max: 0.1 }, { lo: 150, hi: 2000, v: 0, max: 0.1 }, { lo: 2000, hi: 9000, v: 0, max: 0.1 }];
+function attach(newStream, label) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = newStream;
+  ctx = ctx || new AudioContext();
+  ctx.resume();
+  if (source) source.disconnect();
+  analyser = ctx.createAnalyser();
+  analyser.fftSize = 2048;
+  analyser.smoothingTimeConstant = 0.5;
+  bins = new Uint8Array(analyser.frequencyBinCount);
+  source = ctx.createMediaStreamSource(stream);
+  source.connect(analyser);  // niet naar destination: geen echo
+  status.textContent = label;
+}
+const rawAudio = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+async function listDevices() {
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+  const sel = $('devices');
+  sel.length = 1;
+  for (const d of devs) sel.add(new Option(d.label || 'Invoer ' + sel.length, d.deviceId));
+}
+$('devices').onfocus = async () => {
+  if ($('devices').length <= 1 || /^Invoer \d/.test($('devices').options[1].text)) {
+    try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach(t => t.stop()); } catch (e) {}
+    listDevices();
+  }
+};
+$('devices').onchange = async e => {
+  if (!e.target.value) return;
+  try { attach(await navigator.mediaDevices.getUserMedia({ audio: { ...rawAudio, deviceId: { exact: e.target.value } } }), e.target.selectedOptions[0].text); }
+  catch (err) { status.textContent = 'fout: ' + err.message; }
+};
+$('btnSys').onclick = async () => {
+  try {
+    const s = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: { ...rawAudio, systemAudio: 'include' }, systemAudio: 'include' });
+    if (!s.getAudioTracks().length) { s.getTracks().forEach(t => t.stop()); status.textContent = 'geen audio in de deling — vink "audio delen" aan'; return; }
+    s.getVideoTracks().forEach(t => t.stop());
+    attach(s, 'systeem/tab-audio');
+  } catch (err) { status.textContent = 'fout: ' + err.message; }
+};
+const inApp = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.app);
+let native = null;
+window.nativeBands = (b, m, t) => { native = [b, m, t]; };
+window.nativeStatus = msg => { status.textContent = msg.startsWith('NOACCESS') ? 'geen toegang tot systeemaudio' : msg; };
+if (inApp) { $('btnSys').hidden = true; $('devices').hidden = true; status.textContent = 'audio starten…'; }
+
+let beatPos = 0, pulse = 0, bassAvg = 0, lastOnset = 0, energy = 0, live = false, onset = false;
+function analyse(dt, now) {
+  live = !!(analyser || native);
+  onset = false;
+  if (!live) {  // demo: 120 BPM zodat er zonder audio ook iets gebeurt
+    const before = Math.floor(beatPos);
+    beatPos += dt / 0.5;
+    onset = Math.floor(beatPos) !== before && Math.floor(beatPos) % 2 === 0;
+    pulse = Math.exp(-5 * (beatPos % 1));
+    bands[0].v = pulse; bands[1].v = 0.5 + 0.3 * Math.sin(beatPos * 0.7); bands[2].v = 0.4 + 0.4 * Math.exp(-8 * ((beatPos * 2) % 1));
+    energy = 0.8;
+    return;
+  }
+  let hzPerBin, total = 0;
+  if (!native) { analyser.getByteFrequencyData(bins); hzPerBin = ctx.sampleRate / analyser.fftSize; }
+  for (const [k, b] of bands.entries()) {
+    let raw;
+    if (native) raw = native[k];
+    else {
+      const i0 = Math.max(1, Math.floor(b.lo / hzPerBin)), i1 = Math.min(bins.length - 1, Math.ceil(b.hi / hzPerBin));
+      let sum = 0;
+      for (let i = i0; i <= i1; i++) sum += bins[i];
+      raw = sum / (i1 - i0 + 1) / 255;
+    }
+    total += raw;
+    b.max = Math.max(raw, b.max - dt * 0.03, 0.05);
+    const n = Math.min(1, raw / b.max * S.sens);
+    b.v += (n - b.v) * (n > b.v ? 0.5 : 0.08);
+  }
+  energy += ((total > 0.06 ? 0.8 : 0) - energy) * Math.min(1, dt * 2);
+  const bass = bands[0].v;
+  pulse *= Math.exp(-dt * 6);
+  if (bass > bassAvg * 1.35 && bass > 0.35 && now - lastOnset > 0.27) { lastOnset = now; pulse = 1; onset = true; }
+  bassAvg += (bass - bassAvg) * 0.05;
+}
+
+// --- Vloeistof: roeren en één rekenstap ---
+let stirTime = 0;
+function physics(dt, rdt, mid) {
+  stirTime += dt;
+  // roeren: het staafje sleept de vloeistof mee in zijn bewegingsrichting
+  for (const s of stirrers) {
+    const t = stirTime * (0.35 + 0.25 * mid) * L.stir;
+    const p = [0.5 + 0.38 * Math.sin(t * s.sx * 3 + s.ph), 0.5 + 0.36 * Math.sin(t * s.sy * 3 + s.ph * 1.7)];
+    if (s.prev && L.stir > 0.01) {
+      const vx = (p[0] - s.prev[0]) / Math.max(rdt, 1e-3), vy = (p[1] - s.prev[1]) / Math.max(rdt, 1e-3);
+      push(p, [vx * velocity.w * 1.6, vy * velocity.h * 1.6], 0.0018, 0);
+    }
+    s.prev = p;
+  }
+  if (frameNo % 20 === 0) push([0.5, 0.5], [6 * L.stir * (0.6 + mid), 0], 0.08, 1);  // de schaal golft zachtjes op en neer
+  // vloeistofsimulatie
+  draw(curlT, P.curl, { uVelocity: T(velocity.read, 0) });
+  draw(velocity.write, P.vorticity, { uVelocity: T(velocity.read, 0), uCurl: T(curlT, 1), curl: 6, dt });
+  velocity.swap();
+  draw(divergence, P.divergence, { uVelocity: T(velocity.read, 0) });
+  draw(pressure.write, P.scale, { uTarget: T(pressure.read, 0), value: 0.8 });
+  pressure.swap();
+  for (let i = 0; i < 20; i++) { draw(pressure.write, P.pressure, { uPressure: T(pressure.read, 0), uDivergence: T(divergence, 1) }); pressure.swap(); }
+  draw(velocity.write, P.gradient, { uPressure: T(pressure.read, 0), uVelocity: T(velocity.read, 1) });
+  velocity.swap();
+  draw(velocity.write, P.advect, { uVelocity: T(velocity.read, 0), uSource: T(velocity.read, 1), velTexel: velocity.texel, dt, dissipation: 0.6 });
+  velocity.swap();
+  draw(fwd, P.advect, { uVelocity: T(velocity.read, 0), uSource: T(dye.read, 1), velTexel: velocity.texel, dt, dissipation: 0 });
+  draw(bwd, P.advect, { uVelocity: T(velocity.read, 0), uSource: T(fwd, 1), velTexel: velocity.texel, dt: -dt, dissipation: 0 });
+  draw(dye.write, P.maccormack, { uVelocity: T(velocity.read, 0), uSource: T(dye.read, 1), uFwd: T(fwd, 2), uBwd: T(bwd, 3), velTexel: velocity.texel, srcTexel: dye.texel, dt, dissipation: 0.004 });
+  dye.swap();
+}
+
+// --- Vloeiende overgangen: wat je instelt (S) is een doel; de levende waarden (L) glijden er in een paar seconden naartoe ---
+const L = { stir: S.stir, speed: S.speed, mono: S.mono ? 1 : 0, starMix: S.mode === 'sterren' ? 1 : 0, sens: S.sens };
+function glide(rdt) {
+  const k = 1 - Math.exp(-rdt / 3.5);
+  L.stir += (S.stir - L.stir) * k;
+  L.speed += (S.speed - L.speed) * k;
+  L.sens += (S.sens - L.sens) * k;
+  L.mono += ((S.mono ? 1 : 0) - L.mono) * k;
+}
+
+// langzame variatie voor een feedback: z (zoom) en r (draaiing) tussen -1 en 1, d tussen 0 en 1, c = verschuiving van het middelpunt
+const WANDER = [[0.021, 0.057, 0.017, 0.049, 0.026, 0.013, 0.011], [0.033, 0.071, 0.012, 0.039, 0.019, 0.009, 0.015]];
+function wander(t, i) {
+  const f = WANDER[i], ph = i * 2.7;
+  return { z: 0.7 * Math.sin(t * f[0] + ph) + 0.3 * Math.sin(t * f[1] + ph * 2), r: 0.7 * Math.sin(t * f[2] + ph) + 0.3 * Math.sin(t * f[3]),
+           d: 0.5 + 0.5 * Math.sin(t * f[4] + ph * 1.3), c: [0.12 * Math.sin(t * f[5] + ph), 0.1 * Math.cos(t * f[6] + ph)] };
+}
+
+// --- Overgang via zwart: uitfaden, dan de wijziging doorvoeren terwijl het beeld zwart is, dan weer infaden ---
+let fade = 1, fadeDir = 0, atBlack = null;
+function fadeThrough(apply) { atBlack = apply; fadeDir = -1; }
+function stepFade(rdt) {
+  if (fadeDir < 0) {
+    fade -= rdt / 1.6;
+    if (fade <= 0) {
+      fade = 0;
+      if (atBlack) atBlack();
+      atBlack = null;
+      // nieuwe waarden direct laten gelden; het zwart verbergt de sprong
+      Object.assign(L, { stir: S.stir, speed: S.speed, sens: S.sens, mono: S.mono ? 1 : 0, starMix: S.mode === 'sterren' ? 1 : 0 });
+      fadeDir = 1;
+    }
+  } else if (fadeDir > 0) {
+    fade += rdt / 2.2;
+    if (fade >= 1) { fade = 1; fadeDir = 0; }
+  }
+}
+
+// --- Planeten: verschijnen klein in de verte, komen langzaam dichterbij en verdwijnen weer ---
+const planets = [], uPlanet = new Float32Array(8), uPlanetA = new Float32Array(6), uPlanetB = new Float32Array(6), uPlanetRing = new Float32Array(2);
+const PLANET_COLORS = [[[0.85, 0.55, 0.3], [0.55, 0.3, 0.2]], [[0.3, 0.5, 0.9], [0.15, 0.25, 0.55]], [[0.75, 0.75, 0.6], [0.5, 0.45, 0.35]], [[0.7, 0.3, 0.5], [0.3, 0.12, 0.3]], [[0.4, 0.75, 0.6], [0.15, 0.35, 0.35]]];
+let nextPlanet = 8;
+function updatePlanets(rdt, t) {
+  if (t > nextPlanet && planets.length < 2) {
+    nextPlanet = t + rnd(50, 120);
+    const [a, b] = pick(PLANET_COLORS);
+    planets.push({ x: rnd(-0.6, 0.6), y: rnd(-0.35, 0.35), r: rnd(0.012, 0.03), a: 0, A: a, B: b, ring: Math.random() < 0.4 ? 1 : 0, out: false });
+  }
+  for (let i = planets.length - 1; i >= 0; i--) {
+    const p = planets[i];
+    p.r += rdt * 0.0018 * (1 + p.r * 4);           // komt dichterbij, steeds iets sneller
+    p.x *= 1 + rdt * 0.004; p.y *= 1 + rdt * 0.004;  // en schuift naar de rand, zoals bij vooruit vliegen
+    if (p.r > 0.42 || Math.abs(p.x) > 1.2) p.out = true;
+    p.a += ((p.out ? 0 : 1) - p.a) * (1 - Math.exp(-rdt / 4));
+    if (p.out && p.a < 0.01) planets.splice(i, 1);
+  }
+  uPlanet.fill(0);
+  planets.forEach((p, i) => { uPlanet.set([p.x, p.y, p.r, p.a], i * 4); uPlanetA.set(p.A, i * 3); uPlanetB.set(p.B, i * 3); uPlanetRing[i] = p.ring; });
+}
+
+// --- Loop ---
+const meters = [...document.querySelectorAll('#meters i')];
+// de roerstaafjes: twee punten die traag door de schaal trekken en de verf meeslepen
+const stirrers = [{ ph: 0, sx: 0.31, sy: 0.23, prev: null }, { ph: 2.1, sx: 0.19, sy: 0.37, prev: null }, { ph: 4.2, sx: 0.27, sy: 0.17, prev: null }];
+let spaceT = 0, stars = null, fadeIn = 0, warm = 0, nextShift = 40, nextBloom = 0, nextPour = 30, last = performance.now(), frameNo = 0, flicker = 1, nextPaint = 1, nextDrops = 2, nextLine = 4, time = 0;
+function frame(nowMs) {
+  const now = nowMs / 1000, rdt = Math.max(0, Math.min(0.033, (nowMs - last) / 1000));
+  last = nowMs;
+  if (canvas.width !== Math.floor(innerWidth * PR) || canvas.height !== Math.floor(innerHeight * PR)) resize();
+  analyse(rdt, now);
+  const [bass, mid, treble] = bands.map(b => b.v);
+  glide(rdt);
+  stepFade(rdt);
+  const dt = rdt * L.speed * 0.22;  // de vloeistof loopt bewust op een trage klok; de schuif Snelheid gaat tot ruim tien keer zo snel
+  time += dt;
+  const names = PALETTES[S.palette];
+
+  // op de bas drukt iemand het glas in: verf waaiert als een bloem uit, met een ring druppeltjes
+  // niet elke klap: gemiddeld eens per vier tellen, en klein
+  if (onset && time > nextBloom) {
+    nextBloom = time + rnd(1.5, 3.5);
+    const pt = [rnd(0.2, 0.8), rnd(0.2, 0.8)], k = (0.7 + 1.6 * bass) * S.sens;
+    paint(pt, absorb(nextColor(names), rnd(1, 1.6)), rnd(0.02, 0.045) * (0.7 + 0.6 * bass), { petals: 0.8, soft: 0.35 });
+    push(pt, [260 * k, 0], 0.004, 1);
+    if (Math.random() < 0.6) dropletCluster(pt, 18);
+  }
+  if (time > nextPaint) { nextPaint = time + rnd(1, 2.5); paint([rnd(0.05, 0.95), rnd(0.05, 0.95)], absorb(nextColor(names), rnd(1.0, 1.8)), rnd(0.04, 0.12), { soft: 0.4, petals: Math.random() < 0.3 ? 0.5 : 0 }); }
+  if (time > nextLine) {  // een lange streep verf; het roeren rekt die uit tot dunne banden
+    nextLine = time + rnd(5, 10);
+    const y = rnd(0.15, 0.85), x0 = rnd(0, 0.5), c = absorb(nextColor(names), rnd(0.9, 1.4));
+    for (let x = x0; x < x0 + rnd(0.25, 0.5); x += 0.012) paint([x, y + 0.03 * Math.sin(x * 7)], c, 0.009, { soft: 0.6 });
+  }
+  if (time > nextDrops) { nextDrops = time + rnd(1, 3) / Math.max(0.2, S.drops); dropletCluster([rnd(0.1, 0.9), rnd(0.1, 0.9)], rnd(15, 40)); }
+  // af en toe giet de lichtkunstenaar een grote plens verf in een contrasterende kleur, die als een bloem openbarst
+  if (time > nextPour) {
+    nextPour = time + rnd(25, 45);
+    const pt = [rnd(0.25, 0.75), rnd(0.25, 0.75)];
+    paint(pt, absorb(names[names.length - 1 - Math.floor(Math.random() * 2)], rnd(1.3, 2)), rnd(0.12, 0.22), { petals: 0.6, soft: 0.3 });
+    push(pt, [380 * S.sens, 0], 0.012, 1);
+    dropletCluster(pt, 40);
+  }
+  if (treble > 0.8 && Math.random() < 0.1) dropletCluster([rnd(0.1, 0.9), rnd(0.1, 0.9)], 6);
+
+  // bij een verse schaal eerst een poosje vooruit rekenen, zodat je nooit de kale beginlagen ziet
+  const steps = warm > 0 ? 6 : 1;
+  for (let k = 0; k < steps; k++) physics(dt, rdt, mid);
+  if (warm > 0) warm--;
+  if (frameNo++ % 2 === 0) readVelocity();
+  moveDroplets(dt);
+  if (S.grow && time > nextGiant && !droplets.some(d => d.giant)) { nextGiant = time + rnd(25, 60); startGiant(); }
+  flash *= Math.exp(-rdt * 2.5);
+
+  // projectie
+  flicker += ((0.985 + 0.015 * Math.random()) - flicker) * 0.2;
+  fadeIn = warm > 0 ? 0 : Math.min(1, fadeIn + rdt * 0.8);
+  const lightUp = flicker * fadeIn * (1 + 0.6 * flash);  // bij een explosie flitst de lamp even op
+  const look = { uDye: T(dye.read, 0), res: [canvas.width, canvas.height], time: now, flicker: lightUp, mono: L.mono, bass: pulse * energy };
+  if (L.starMix > 0.5) {
+    spaceT += rdt * L.speed;
+    updatePlanets(rdt * L.speed, spaceT);
+    // twee onafhankelijke, langzaam variërende feedbacks: de lucht (sterren vliegen op je af) en het vloeistofbeeld (zweeft weg of komt op je af)
+    const sk = wander(spaceT, 0), lt = wander(spaceT, 1);
+    draw(stars.sky.write, P.space, { uPrev: T(stars.sky.read, 0), res: [canvas.width, canvas.height], time: spaceT,
+      zoom: 0.975 + 0.024 * sk.z, rotA: 0.008 * sk.r, decay: 0.7 + 0.25 * sk.d, center: sk.c, drift: [sk.c[0] * 4, sk.c[1] * 4],
+      fly: spaceT * 0.012, uPlanet, uPlanetA, uPlanetB, uPlanetRing });
+    stars.sky.swap();
+    draw(stars.cur, P.display, { ...look, key: 1 });
+    draw(stars.light.write, P.fbk, { uCur: T(stars.cur, 0), uPrev: T(stars.light.read, 1), res: [canvas.width, canvas.height],
+      zoom: 1.0 + 0.03 * lt.z, rotA: 0.012 * lt.r, decay: 0.8 + 0.16 * lt.d, center: lt.c });
+    stars.light.swap();
+    draw(null, P.compose, { uSky: T(stars.sky.read, 0), uLight: T(stars.light.read, 1) });
+  } else {
+    draw(null, P.display, { ...look, key: 0 });
+    drawDroplets();
+  }
+  // overgang via zwart (bij alles willekeurig en bij het wisselen van modus)
+  if (fade < 1) {
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    draw(null, P.dim, { g: fade });
+    gl.disable(gl.BLEND);
+  }
+
+  if (S.autoOn && now > autoNext) { if (autoNext) randomizeAll(); autoNext = now + S.autoSec; }
+  meters.forEach((el, i) => el.style.height = (2 + bands[i].v * 22) + 'px');
+  requestAnimationFrame(frame);
+}
+
+// --- UI ---
+function syncUI() {
+  $('mode').value = S.mode; $('palette').value = S.palette; $('mono').checked = S.mono; $('grow').checked = S.grow; $('shift').checked = S.shift; $('autoOn').checked = S.autoOn; $('autoSec').value = S.autoSec; $('autoSecV').textContent = S.autoSec + ' s';
+  for (const k of ['stir', 'drops', 'speed', 'sens']) { $(k).value = S[k]; $(k + 'V').textContent = Math.round(S[k] * 100) + '%'; }
+}
+$('mode').onchange = e => { const m = e.target.value; fadeThrough(() => { S.mode = m; save(); }); };
+$('palette').onchange = e => { S.palette = e.target.value; save(); };
+$('mono').onchange = e => { S.mono = e.target.checked; save(); };
+for (const k of ['stir', 'drops', 'speed', 'sens']) $(k).oninput = e => { S[k] = +e.target.value; syncUI(); save(); };
+$('btnNew').onclick = () => newDish();
+$('shift').onchange = e => { S.shift = e.target.checked; save(); };
+$('grow').onchange = e => { S.grow = e.target.checked; save(); };
+$('autoOn').onchange = e => { S.autoOn = e.target.checked; autoNext = performance.now() / 1000 + S.autoSec; save(); };
+$('autoSec').oninput = e => { S.autoSec = +e.target.value; autoNext = performance.now() / 1000 + S.autoSec; syncUI(); save(); };
+$('btnAll').onclick = () => { randomizeAll(); autoNext = performance.now() / 1000 + S.autoSec; };
+// alles tegelijk willekeurig: kleuren, weergave, roeren, druppels, tempo en soms een verse schaal
+let autoNext = 0;
+function randomizeAll() { fadeThrough(applyRandom); }
+function applyRandom() {
+  S.palette = pick(Object.keys(PALETTES));
+  S.stir = +rnd(0.15, 2.5).toFixed(2);
+  S.drops = +rnd(0.1, 2).toFixed(2);
+  S.grow = Math.random() < 0.7;
+  S.mode = Math.random() < 0.35 ? 'sterren' : 'projectie';
+  S.speed = +Math.exp(rnd(Math.log(0.3), Math.log(4))).toFixed(2);  // van heel traag tot fel, gelijkmatig verdeeld
+  S.shift = Math.random() < 0.7;
+  S.mono = Math.random() < 0.12;
+  if (Math.random() < 0.4) newDish();
+  syncUI();
+  save();
+}
+$('btnFull').onclick = () => {
+  if (inApp) window.webkit.messageHandlers.app.postMessage('fullscreen');
+  else document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+};
+addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey) return;
+  const inControl = /^(INPUT|SELECT)$/.test(e.target.tagName);
+  if (inApp && !inControl) e.preventDefault();
+  if (inControl && e.key.startsWith('Arrow')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'h') $('ui').classList.toggle('hidden');
+  if (k === 'f') $('btnFull').click();
+  if (k === 'n') newDish();
+  if (k === 'x') $('btnAll').click();
+  if (k === 's') { const m = S.mode === 'sterren' ? 'projectie' : 'sterren'; $('mode').value = m; fadeThrough(() => { S.mode = m; save(); }); }
+  if (k === 'g') { S.grow = !S.grow; syncUI(); save(); }
+  if (k === 'b') { S.mono = !S.mono; syncUI(); save(); }
+  if (k === 'p') { const o = Object.keys(PALETTES); S.palette = o[(o.indexOf(S.palette) + 1) % o.length]; syncUI(); save(); }
+});
+// Paneel en muiswijzer verdwijnen na 10 s zonder muisbeweging
+let idleTimer;
+function wake() {
+  $('ui').classList.remove('hidden');
+  document.body.style.cursor = '';
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { $('ui').classList.add('hidden'); document.body.style.cursor = 'none'; }, 10000);
+}
+for (const ev of ['mousemove', 'mousedown', 'wheel']) addEventListener(ev, wake);
+wake();
+
+syncUI();
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
